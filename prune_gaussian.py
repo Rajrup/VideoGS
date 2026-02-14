@@ -29,7 +29,7 @@ from plyfile import PlyData
 
 def finetune(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, last_ckpt_path, last_ckpt_iter):
     first_iter = 0
-    gaussians = GaussianModel(0)
+    gaussians = GaussianModel(dataset.sh_degree)
     scene = DynamicScene(dataset)
     gaussians.load_ply(last_ckpt_path)
     gaussians.training_setup(opt)
@@ -171,12 +171,15 @@ if __name__ == "__main__":
 
     # prune percentage
     prune_percentage = 0.5 # 20%
-    last_ckpt_iter = 12000
+    last_ckpt_iter = 12000 # Original setting by the authors of VideoGS
+    # last_ckpt_iter = 30000
     # search for the last checkpoint
     pcd_path = os.path.join(args.model_path, "point_cloud")
     last_ckpt_path = os.path.join(pcd_path, "iteration_{}".format(last_ckpt_iter), "point_cloud.ply")
 
-    sh_degree = 0
+    # sh_degree = 0 # Hardcoded by the authors of VideoGS
+    # Use same sh_degree as training so pruned PLY has correct f_rest_ columns for train_dynamic.py
+    sh_degree = lp.extract(args).sh_degree
 
     pcd = get_ply_matrix(last_ckpt_path)
     print("Loaded point cloud with shape: ", pcd.shape)

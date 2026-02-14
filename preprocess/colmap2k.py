@@ -107,7 +107,9 @@ def closest_point_2_lines(oa, da, ob, db): # returns point closest to both rays 
 
 def gen_K(transforms):
     transforms["white_transparent"] = True
-    transforms["aabb_scale"] = 1
+    # Do not overwrite aabb_scale; it is set from --aabb_scale when building out[]
+    if "aabb_scale" not in transforms:
+        transforms["aabb_scale"] = 1
     for i in range(len(transforms["frames"])):
         K = [[transforms["frames"][i]["fl_x"],0,transforms["frames"][i]["cx"]],[0,transforms["frames"][i]["fl_y"],transforms["frames"][i]["cy"]],[0,0,1]]
         transforms["frames"][i]["K"] = K

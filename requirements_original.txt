@@ -7,7 +7,7 @@ commentjson
 imageio
 pybind11
 scipy
-# opencv-python
+opencv-python
 trimesh
 tensorboard
 natsort

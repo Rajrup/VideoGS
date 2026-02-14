@@ -210,7 +210,7 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
             # bg = np.array([1,1,1]) if white_background else np.array([0, 0, 0])
             norm_data = image / 255.0
             # arr = norm_data[:,:,:3] * norm_data[:, :, 3:4] + bg * (1 - norm_data[:, :, 3:4])
-            image = Image.fromarray(np.array(norm_data*255.0, dtype=np.byte), "RGB")
+            image = Image.fromarray(np.array(norm_data*255.0, dtype=np.uint8), "RGB")
 
 
             # image = Image.open(image_path)
