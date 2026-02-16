@@ -160,7 +160,7 @@ python train_sequence.py --start 0 --end 200 --cuda 1 --data /synology/rajrup/Vi
 
 python train_sequence.py --start 0 --end 40 --cuda 0 --data /synology/rajrup/VideoGS/HiFi4G_Dataset_processed/4K_Actor2_Dancing --output /synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor2_Dancing_sh0_res4 --sh 0 --interval 1 --group_size 20 --resolution 4 # App working
 
-python train_sequence.py --start 0 --end 40 --cuda 0 --data /synology/rajrup/VideoGS/HiFi4G_Dataset_processed/4K_Actor2_Dancing --output /synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor2_Dancing_sh0_res2 --sh 0 --interval 1 --group_size 20 --resolution 2 # Testing
+python train_sequence.py --start 0 --end 40 --cuda 0 --data /synology/rajrup/VideoGS/HiFi4G_Dataset_processed/4K_Actor2_Dancing --output /synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor2_Dancing_sh0_res2 --sh 0 --interval 1 --group_size 20 --resolution 2 # App working
 ```
 
 ### Training on ActorsHQ Dataset
@@ -186,7 +186,7 @@ python compress_ckpt_2_image_precompute.py --frame_start 0 --frame_end 200 --gro
 
 python compress_ckpt_2_image_precompute.py --frame_start 0 --frame_end 40 --group_size 20 --interval 1 --ply_path /synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor2_Dancing_sh0_res4/checkpoint --output_folder /synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor2_Dancing_sh0_res4/feature_image --sh_degree 0 # App working
 
-python compress_ckpt_2_image_precompute.py --frame_start 0 --frame_end 40 --group_size 20 --interval 1 --ply_path /synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor2_Dancing_sh0_res2/checkpoint --output_folder /synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor2_Dancing_sh0_res2/feature_image --sh_degree 0 # Testing
+python compress_ckpt_2_image_precompute.py --frame_start 0 --frame_end 40 --group_size 20 --interval 1 --ply_path /synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor2_Dancing_sh0_res2/checkpoint --output_folder /synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor2_Dancing_sh0_res2/feature_image --sh_degree 0 # App working
 
 # QP = lower refers to higher quality, but larger size
 # QP = 22 is the highest recommended value used in the paper

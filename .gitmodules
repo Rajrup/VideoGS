@@ -4,3 +4,6 @@
 [submodule "submodules/diff-gaussian-rasterization"]
 	path = submodules/diff-gaussian-rasterization
 	url = https://github.com/graphdeco-inria/diff-gaussian-rasterization
+[submodule "VideoGS_IOS_Viewer"]
+	path = VideoGS_IOS_Viewer
+	url = https://github.com/Amartya1911/VideoGS_IOS_Viewer.git
