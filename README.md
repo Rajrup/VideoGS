@@ -14,6 +14,7 @@ pip install numpy==1.26.4
 pip install opencv-python==4.11.0.86
 pip install mkl==2023.2.0
 pip install torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu121
+pip install torchmetrics[image]
 pip install -r requirements.txt --no-build-isolation 
 pip install submodules/diff-gaussian-rasterization --no-build-isolation # Only pytorch 2.4 with CUDA 12.1 worked. Other versions resulted in compilation errors.
 pip install submodules/simple-knn --no-build-isolation
@@ -48,82 +49,14 @@ pip install huggingface_hub
 ### HiFi4G Dataset Download
 
 ```bash
-hf download moqiyinlun1/HiFiHuman --repo-type dataset --local-dir /synology/rajrup/Datasets/ --include "HiFi4G_Dataset/4K_Actor1_Greeting/*"            # Done
-hf download moqiyinlun1/HiFiHuman --repo-type dataset --local-dir /synology/rajrup/Datasets/ --include "HiFi4G_Dataset/4K_Actor2_Dancing/*"             # Done
-hf download moqiyinlun1/HiFiHuman --repo-type dataset --local-dir /synology/rajrup/Datasets/ --include "HiFi4G_Dataset/4K_Actor3_Violin/*"              # Done
-hf download moqiyinlun1/HiFiHuman --repo-type dataset --local-dir /synology/rajrup/Datasets/ --include "HiFi4G_Dataset/4K_Actor4_Dancing/*"             # Done
-hf download moqiyinlun1/HiFiHuman --repo-type dataset --local-dir /synology/rajrup/Datasets/ --include "HiFi4G_Dataset/4K_Actor5_Oil-paper_Umbrella/*"  # Done
-hf download moqiyinlun1/HiFiHuman --repo-type dataset --local-dir /synology/rajrup/Datasets/ --include "HiFi4G_Dataset/4K_Actor6_Changing_Clothes/*"    # Done
-hf download moqiyinlun1/HiFiHuman --repo-type dataset --local-dir /synology/rajrup/Datasets/ --include "HiFi4G_Dataset/4K_Actor7_Nunchaku/*"            # Done
-
-cd /synology/rajrup/Datasets/HiFi4G_Dataset/4K_Actor1_Greeting                          # Done
-cat 4K_Actor1_Greeting.zip.parta* > 4K_Actor1_Greeting.zip
-unzip -t 4K_Actor1_Greeting.zip
-unzip 4K_Actor1_Greeting.zip
-mv image_white_undistortion/colmap ./
-mv colmap/sparse/0/* colmap/sparse/ && rm -rf colmap/sparse/0
-rm -rf 4K_Actor1_Greeting.zip.parta*
-
-cd /synology/rajrup/Datasets/HiFi4G_Dataset/4K_Actor2_Dancing                           # Done
-cat 4K_Actor2_Dancing.zip.parta* > 4K_Actor2_Dancing.zip
-unzip -t 4K_Actor2_Dancing.zip
-unzip 4K_Actor2_Dancing.zip
-mv image_white_undistortion/colmap ./
-mv colmap/sparse/0/* colmap/sparse/ && rm -rf colmap/sparse/0
-rm -rf 4K_Actor2_Dancing.zip.parta*
-
-cd /synology/rajrup/Datasets/HiFi4G_Dataset/4K_Actor3_Violin                            # Done
-cat 4K_Actor3_Violin.zip.parta* > 4K_Actor3_Violin.zip
-unzip -t 4K_Actor3_Violin.zip
-unzip 4K_Actor3_Violin.zip
-mv image_white_undistortion/colmap ./
-mv colmap/sparse/0/* colmap/sparse/ && rm -rf colmap/sparse/0
-rm -rf 4K_Actor3_Violin.zip.parta*
-
-cd /synology/rajrup/Datasets/HiFi4G_Dataset/4K_Actor4_Dancing                           # Done
-cat 4K_Actor4_Dancing.zip.parta* > 4K_Actor4_Dancing.zip
-unzip -t 4K_Actor4_Dancing.zip
-unzip 4K_Actor4_Dancing.zip
-mv image_white_undistortion/colmap ./
-mv colmap/sparse/0/* colmap/sparse/ && rm -rf colmap/sparse/0
-rm -rf 4K_Actor4_Dancing.zip.parta*
-
-cd /synology/rajrup/Datasets/HiFi4G_Dataset/4K_Actor5_Oil-paper_Umbrella                # Done
-cat 4K_Actor5_Oil-paper_Umbrella.zip.parta* > 4K_Actor5_Oil-paper_Umbrella.zip
-unzip -t 4K_Actor5_Oil-paper_Umbrella.zip
-unzip 4K_Actor5_Oil-paper_Umbrella.zip
-mv image_white_undistortion/colmap ./
-mv colmap/sparse/0/* colmap/sparse/ && rm -rf colmap/sparse/0
-rm -rf 4K_Actor5_Oil-paper_Umbrella.zip.parta*
-
-cd /synology/rajrup/Datasets/HiFi4G_Dataset/4K_Actor6_Changing_Clothes                  # Done
-cat 4K_Actor6_Changing_Clothes.zip.parta* > 4K_Actor6_Changing_Clothes.zip
-unzip -t 4K_Actor6_Changing_Clothes.zip
-unzip 4K_Actor6_Changing_Clothes.zip
-mv image_white_undistortion/colmap ./
-mv colmap/sparse/0/* colmap/sparse/ && rm -rf colmap/sparse/0
-rm -rf 4K_Actor6_Changing_Clothes.zip.parta*
-
-cd /synology/rajrup/Datasets/HiFi4G_Dataset/4K_Actor7_Nunchaku                          # Done
-cat 4K_Actor7_Nunchaku.zip.parta* > 4K_Actor7_Nunchaku.zip
-unzip -t 4K_Actor7_Nunchaku.zip
-unzip 4K_Actor7_Nunchaku.zip
-mv image_white_undistortion/colmap ./
-mv colmap/sparse/0/* colmap/sparse/ && rm -rf colmap/sparse/0
-rm -rf 4K_Actor7_Nunchaku.zip.parta*
+bash preprocess/hifi4g_download.sh
 ```
 
 ### HiFi4G Dataset Preprocess
 
 ```bash
 cd preprocess
-python hifi4g_process.py --input /synology/rajrup/Datasets/HiFi4G_Dataset/4K_Actor1_Greeting --output /synology/rajrup/VideoGS/HiFi4G_Dataset_processed/4K_Actor1_Greeting --move True                      # Done
-python hifi4g_process.py --input /synology/rajrup/Datasets/HiFi4G_Dataset/4K_Actor2_Dancing --output /synology/rajrup/VideoGS/HiFi4G_Dataset_processed/4K_Actor2_Dancing --move True                        # Done
-python hifi4g_process.py --input /synology/rajrup/Datasets/HiFi4G_Dataset/4K_Actor3_Violin --output /synology/rajrup/VideoGS/HiFi4G_Dataset_processed/4K_Actor3_Violin --move True                          # Done
-python hifi4g_process.py --input /synology/rajrup/Datasets/HiFi4G_Dataset/4K_Actor4_Dancing --output /synology/rajrup/VideoGS/HiFi4G_Dataset_processed/4K_Actor4_Dancing --move False                       # Not Done
-python hifi4g_process.py --input /synology/rajrup/Datasets/HiFi4G_Dataset/4K_Actor5_Oil-paper_Umbrella --output /synology/rajrup/VideoGS/HiFi4G_Dataset_processed/4K_Actor5_Oil-paper_Umbrella --move True  # Done
-python hifi4g_process.py --input /synology/rajrup/Datasets/HiFi4G_Dataset/4K_Actor6_Changing_Clothes --output /synology/rajrup/VideoGS/HiFi4G_Dataset_processed/4K_Actor6_Changing_Clothes --move True      # Done
-python hifi4g_process.py --input /synology/rajrup/Datasets/HiFi4G_Dataset/4K_Actor7_Nunchaku --output /synology/rajrup/VideoGS/HiFi4G_Dataset_processed/4K_Actor7_Nunchaku --move False                     # Not Done
+bash hifi4g_preprocess.sh
 ```
 
 ### ActorsHQ Dataset Preprocess
@@ -177,7 +110,7 @@ python train_sequence.py --start 0 --end 20 --cuda 0 --data /synology/rajrup/Vid
 
 ```bash
 cd compress
-python compress_ckpt_2_image_precompute.py --frame_start 0 --frame_end 200 --group_size 20 --interval 1 --ply_path /synology/rajrup/VideoGS/train_output/4K_Actor2_Dancing/checkpoint --output_folder /synology/rajrup/VideoGS/train_output/4K_Actor2_Dancing/feature_image --sh_degree 0    # Done
+python compress_ckpt_2_image_precompute.py --frame_start 0 --frame_end 200 --group_size 20 --interval 1 --ply_path /synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor2_Dancing/checkpoint --output_folder /synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor2_Dancing/feature_image --sh_degree 0    # Done
 
 #/home/rajrup/Project/VideoGS/compress/compress_ckpt_2_image_precompute.py:11: RuntimeWarning: invalid value encountered in divide
 # normalized = (data - min_val) / (max_val - min_val) * 255.0
@@ -190,9 +123,25 @@ python compress_ckpt_2_image_precompute.py --frame_start 0 --frame_end 40 --grou
 
 # QP = lower refers to higher quality, but larger size
 # QP = 22 is the highest recommended value used in the paper
-python compress_image_2_video.py --frame_start 0 --frame_end 200 --group_size 20 --output_path /synology/rajrup/VideoGS/train_output/4K_Actor2_Dancing --qp 22    # Done
+python compress_image_2_video.py --frame_start 0 --frame_end 200 --group_size 20 --output_path /synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor2_Dancing --qp 22    # Done
 
 python compress_image_2_video.py --frame_start 0 --frame_end 40 --group_size 20 --output_path /synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor2_Dancing_sh0_res4 --qp 15 # App working
 
 python compress_image_2_video.py --frame_start 0 --frame_end 40 --group_size 20 --output_path /synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor2_Dancing_sh0_res2 --qp 15 # Testing
+```
+
+### Our compression script
+
+**Note:** The VideoGS baseline pipeline script and plot scripts live in **`scripts/videogs_baseline/`**. From the project root you can run the full compress→decompress→evaluate pipeline with `bash scripts/videogs_baseline/evaluate_videogs_compression.sh`, then generate plots with the scripts in `scripts/videogs_baseline/plots/` (see that folder’s README).
+
+#### Running the VideoGS pipeline
+
+```bash
+bash scripts/videogs_baseline/evaluate_videogs_compression.sh
+```
+
+#### Generating plots
+
+```bash
+bash scripts/videogs_baseline/plots/plot_benchmark.sh
 ```
