@@ -7,3 +7,6 @@
 [submodule "VideoGS_IOS_Viewer"]
 	path = VideoGS_IOS_Viewer
 	url = https://github.com/Amartya1911/VideoGS_IOS_Viewer.git
+[submodule "LiVoGS"]
+	path = LiVoGS
+	url = https://github.com/haodongw101/LiVoGS.git
