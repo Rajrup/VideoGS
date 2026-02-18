@@ -10,6 +10,7 @@
 **Dependencies for VideoGS:**
 
 ```bash
+git clone --recurse-submodules https://github.com/Rajrup/VideoGS.git
 conda create -n videogs python=3.10 -y
 conda activate videogs
 pip install numpy==1.26.4
