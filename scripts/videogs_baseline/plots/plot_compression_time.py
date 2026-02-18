@@ -124,12 +124,26 @@ def main():
     )
     ax.set_xlabel("Frame")
     ax.set_ylabel("Time (ms)")
-    ax.set_title("Compression and decompression time per frame (stacked area)")
     tick_every = 5
     ax.set_xticks(x[::tick_every])
     ax.set_xticklabels(frame_ids[::tick_every], rotation=90)
     ax.legend(loc="upper right")
     ax.grid(True, alpha=0.3)
+    ax.set_title(f"VideoGS compression and decompression time per frame [QP={args.qp}]")
+
+    avg_cpng = sum(compress_png) / n
+    avg_cvid = sum(compress_video) / n
+    avg_dvid = sum(decompress_video) / n
+    avg_dply = sum(decompress_png_to_ply) / n
+    avg_total = avg_cpng + avg_cvid + avg_dvid + avg_dply
+    ax.annotate(
+        f"avg/frame: PNG enc={avg_cpng:.1f}, H.264 enc={avg_cvid:.1f}, "
+        f"H.264 dec={avg_dvid:.1f}, PNG dec={avg_dply:.1f}, total={avg_total:.1f}ms",
+        xy=(0.02, 0.95), xycoords="axes fraction",
+        fontsize=8, va="top",
+        bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8),
+    )
+
     fig.tight_layout()
 
     fig.savefig(out_path, dpi=150)

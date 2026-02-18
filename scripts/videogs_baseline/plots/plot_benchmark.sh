@@ -13,9 +13,6 @@ plot_script_folder="${working_dir}/scripts/videogs_baseline/plots"
 # Plot compression/decompression time
 python ${plot_script_folder}/plot_compression_time.py --input_folder ${input_folder} --qp ${QP} --output_folder ${plot_script_folder}
 
-# Plot compression/decompression time area plot
-python ${plot_script_folder}/plot_compression_time_area.py --input_folder ${input_folder} --qp ${QP} --output_folder ${plot_script_folder}
-
 # Plot quality
 python ${plot_script_folder}/plot_quality.py --input_folder ${input_folder} --qp ${QP} --output_folder ${plot_script_folder}
 

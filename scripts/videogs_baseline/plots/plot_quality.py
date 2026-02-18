@@ -41,23 +41,38 @@ def main():
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
 
-    x = range(len(frames))
-    tick_every = 5
-    ax1.set_xticks(x[::tick_every])
-    ax1.set_xticklabels(frames[::tick_every], rotation=90)
+    n = len(frames)
+    x = range(n)
+    tick_every = max(1, n // 40)
+
+    # --- PSNR ---
     ax1.plot(x, gt_psnr, "o-", label="GT model", color="green", markersize=4)
     ax1.plot(x, decomp_psnr, "s-", label="Decompressed model", color="coral", markersize=4)
-    ax1.set_ylabel("PSNR")
-    ax1.set_title("Quality per frame: GT vs Decompressed")
-    ax1.legend()
+    ax1.set_ylabel("PSNR (dB)")
+    ax1.set_title(f"VideoGS quality per frame: GT vs Decompressed [QP={args.qp}]")
+    avg_gt_p = sum(gt_psnr) / n
+    avg_dec_p = sum(decomp_psnr) / n
+    ax1.axhline(y=avg_gt_p, color="green", linestyle="--", alpha=0.4,
+                label=f"GT avg = {avg_gt_p:.2f}")
+    ax1.axhline(y=avg_dec_p, color="coral", linestyle="--", alpha=0.4,
+                label=f"Decomp avg = {avg_dec_p:.2f}")
+    ax1.legend(fontsize=8)
     ax1.grid(True, alpha=0.3)
 
+    # --- SSIM ---
     ax2.plot(x, gt_ssim, "o-", label="GT model", color="green", markersize=4)
     ax2.plot(x, decomp_ssim, "s-", label="Decompressed model", color="coral", markersize=4)
     ax2.set_xlabel("Frame")
     ax2.set_ylabel("SSIM")
-    plt.setp(ax2.get_xticklabels(), rotation=90)
-    ax2.legend()
+    avg_gt_s = sum(gt_ssim) / n
+    avg_dec_s = sum(decomp_ssim) / n
+    ax2.axhline(y=avg_gt_s, color="green", linestyle="--", alpha=0.4,
+                label=f"GT avg = {avg_gt_s:.4f}")
+    ax2.axhline(y=avg_dec_s, color="coral", linestyle="--", alpha=0.4,
+                label=f"Decomp avg = {avg_dec_s:.4f}")
+    ax2.set_xticks(list(x)[::tick_every])
+    ax2.set_xticklabels(frames[::tick_every], rotation=90)
+    ax2.legend(fontsize=8)
     ax2.grid(True, alpha=0.3)
 
     fig.tight_layout()

@@ -1,0 +1,717 @@
+#!/usr/bin/env python3
+"""
+LiVoGS Compression + Decompression for VideoGS-trained Gaussian Splat Models.
+
+For each frame:
+  1. Load PLY from VideoGS checkpoint (not timed)
+  2. encode_livogs(): Morton → Voxelize → Merge → Position encode → RAHT → Quantize → RLGR
+  3. decode_livogs(): RLGR → Dequant → Position decode → RAHT prelude → iRAHT
+  4. save_to_ply(): Save reconstructed model to disk (not timed)
+
+The compressed bytestream stays on GPU (no GPU→CPU transfer).
+"""
+
+import os
+import sys
+import csv
+import time
+import argparse
+import numpy as np
+import torch
+import torch.nn.functional as F
+from tqdm import tqdm
+from plyfile import PlyData
+
+# --- Setup sys.path for LiVoGS imports ---
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_THIS_DIR)
+_LIVOGS_COMPRESSION = os.path.join(_PROJECT_ROOT, "LiVoGS", "compression")
+
+if _LIVOGS_COMPRESSION not in sys.path:
+    sys.path.insert(0, _LIVOGS_COMPRESSION)
+
+_RAHT_PY_ROOT = os.path.join(_LIVOGS_COMPRESSION, "RAHT-3DGS-codec", "python")
+if _RAHT_PY_ROOT not in sys.path:
+    sys.path.append(_RAHT_PY_ROOT)
+
+_OCTREE_ROOT = os.path.join(_LIVOGS_COMPRESSION, "Octree_Compression_GPU")
+sys.path.insert(0, os.path.join(_OCTREE_ROOT, 'python'))
+sys.path.insert(0, os.path.join(_OCTREE_ROOT, 'build'))
+
+from gpu_octree_codec import calc_morton, compress_positions_gpu_resident, decompress_positions_gpu_resident
+from merge_cluster_cuda import merge_gaussian_clusters_with_indices
+from voxelize_pc import voxelize_pc
+from color_space_transforms import (
+    normalize_attributes,
+    denormalize_attributes,
+    rgb_to_yuv,
+    yuv_to_rgb,
+    compute_klt_matrices_per_degree,
+    rgb_to_klt,
+    klt_to_rgb,
+)
+import raht_cuda
+import rlgr_gpu
+
+DEFAULT_QUANTIZE_STEP = {
+        'quats': 0.0001,
+        'scales': 0.0001,
+        'opacity': 0.0001,
+        'sh_dc': 0.0001,
+        'sh_rest': [0.0001] * 45,
+    }
+
+# ---------------------------------------------------------------------------
+# PLY I/O (VideoGS-compatible)
+# ---------------------------------------------------------------------------
+
+def searchForMaxIteration(folder):
+    saved_iters = [int(fname.split("_")[-1]) for fname in os.listdir(folder) if "iteration_" in fname]
+    return max(saved_iters)
+
+
+def load_videogs_ply(ply_path, device='cuda'):
+    """Load a VideoGS-trained PLY and return LiVoGS-compatible param dict on GPU.
+
+    VideoGS PLY attribute order:
+        x, y, z, nx, ny, nz, f_dc_0..2, f_rest_0..44, opacity,
+        scale_0..2, rot_0..3
+
+    Normals (nx, ny, nz) are always zero in VideoGS and are ignored.
+    Opacities are converted from logit to [0,1], scales from log to positive.
+    """
+    plydata = PlyData.read(ply_path)
+    vertex = plydata['vertex']
+
+    means = np.stack([vertex['x'], vertex['y'], vertex['z']], axis=1)
+    sh_dc = np.stack([vertex['f_dc_0'], vertex['f_dc_1'], vertex['f_dc_2']], axis=1)
+
+    rest_names = sorted(
+        [p.name for p in vertex.properties if p.name.startswith('f_rest_')],
+        key=lambda x: int(x.split('_')[-1])
+    )
+    if rest_names:
+        sh_rest = np.stack([vertex[name] for name in rest_names], axis=1)
+    else:
+        sh_rest = np.zeros((len(vertex), 0), dtype=np.float32)
+    colors = np.concatenate([sh_dc, sh_rest], axis=1)
+
+    opacities = np.asarray(vertex['opacity'])
+    scales = np.stack([vertex['scale_0'], vertex['scale_1'], vertex['scale_2']], axis=1)
+    quats = np.stack([vertex['rot_0'], vertex['rot_1'], vertex['rot_2'], vertex['rot_3']], axis=1)
+
+    params = {
+        'means': torch.from_numpy(means.copy()).float().to(device),
+        'quats': torch.from_numpy(quats.copy()).float().to(device),
+        'scales': torch.from_numpy(scales.copy()).float().to(device),
+        'opacities': torch.from_numpy(opacities.copy()).float().to(device),
+        'colors': torch.from_numpy(colors.copy()).float().to(device),
+    }
+
+    # Normalize quaternions -> Refer to LiVoGS/compression/data_util.py
+    params['quats'] = F.normalize(params['quats'], p=2, dim=1)
+    # Logit → [0, 1]
+    if params['opacities'].min() < 0 or params['opacities'].max() > 1:
+        params['opacities'] = torch.sigmoid(params['opacities'])
+    # Log → positive
+    if params['scales'].min() < 0:
+        params['scales'] = torch.exp(params['scales'])
+
+    return params
+
+
+def save_videogs_ply(params, output_path, sh_degree=3, eps=1e-6):
+    """Save reconstructed params back to VideoGS-compatible PLY.
+
+    Converts opacities back to logit space and scales back to log space so that
+    GaussianModel.load_ply() can consume them directly.
+    """
+    means = params['means'].detach().cpu().float().numpy()
+    quats = params['quats'].detach().cpu().float().numpy()
+    scales = params['scales'].detach().cpu().float().numpy()
+    opacities = params['opacities'].detach().cpu().float().numpy()
+    colors = params['colors'].detach().cpu().float().numpy()
+
+    N = means.shape[0]
+
+    # Convert back to raw (logit / log) space for VideoGS compatibility
+    opacities_c = np.clip(opacities, eps, 1.0 - eps)
+    opacities_logit = np.log(opacities_c / (1.0 - opacities_c))
+    scales_log = np.log(np.clip(scales, eps, None))
+
+    # Build attribute names matching VideoGS convention
+    attr_names = ['x', 'y', 'z', 'nx', 'ny', 'nz']
+    for i in range(3):
+        attr_names.append(f'f_dc_{i}')
+    n_rest = colors.shape[1] - 3
+    for i in range(n_rest):
+        attr_names.append(f'f_rest_{i}')
+    attr_names.append('opacity')
+    for i in range(3):
+        attr_names.append(f'scale_{i}')
+    for i in range(4):
+        attr_names.append(f'rot_{i}')
+
+    normals = np.zeros((N, 3), dtype=np.float32)
+    data = np.concatenate([
+        means, normals, colors,
+        opacities_logit.reshape(-1, 1),
+        scales_log, quats,
+    ], axis=1).astype(np.float32)
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, 'wb') as f:
+        f.write(b"ply\n")
+        f.write(b"format binary_little_endian 1.0\n")
+        f.write(f"element vertex {N}\n".encode())
+        for name in attr_names:
+            f.write(f"property float {name}\n".encode())
+        f.write(b"end_header\n")
+        f.write(data.tobytes())
+
+
+# ---------------------------------------------------------------------------
+# Encode / Decode
+# ---------------------------------------------------------------------------
+
+def encode_livogs(
+    params, 
+    J=15, 
+    device="cuda:0",
+    device_id=0,
+    precision="fp32",
+    sh_color_space='rgb', 
+    color_rescale=True,
+    quantize_step=DEFAULT_QUANTIZE_STEP,
+    rlgr_block_size=4096,
+):
+    """Encode Gaussian parameters using LiVoGS (all on GPU).
+
+    Steps:
+        a. Morton code calculation
+        b. Voxelization
+        c. Merging Gaussians per voxel
+        d. Position encoding (GPU Octree codec)
+        e. RAHT (prelude + forward transform)
+        f. Quantization of RAHT coefficients
+        g. RLGR GPU encoding
+
+    Returns a compressed_state dict with everything the decoder needs.
+    """
+
+    float_precision_type = torch.float32
+    if precision == "fp64":
+        float_precision_type = torch.float64
+    elif precision == "fp32":
+        float_precision_type = torch.float32
+    elif precision == "fp16":
+        float_precision_type = torch.float16
+    elif precision == "bf16":
+        float_precision_type = torch.bfloat16
+
+    N = params['means'].shape[0]
+    apply_color_rescale = color_rescale
+
+    # --- (a) Morton code calculation ---
+    try:
+        V_means = params['means']
+        vmin = V_means.min(dim=0)[0]
+        V0 = V_means - vmin.unsqueeze(0)
+        width = V0.max()
+        voxel_size = width / (2.0 ** J)
+        V0_integer = torch.clamp(torch.floor(V0 / voxel_size).long(), 0, 2**J - 1).int()
+
+        morton_result = calc_morton(
+            V0_integer, voxel_grid_depth=J,
+            force_64bit_codes=True, device=device_id, return_torch=True
+        )
+        morton_codes_points = morton_result['morton_codes']
+        if morton_codes_points.dtype == torch.uint64:
+            morton_codes_points = morton_codes_points.to(torch.int64)
+    except Exception as e:
+        raise RuntimeError(f"Morton code calculation failed: {e}")
+
+    # --- (b) Voxelization ---
+    PCvox, PCsorted, voxel_indices, DeltaPC, voxel_info = voxelize_pc(
+        params['means'], vmin=vmin, width=width, J=J,
+        device=device, morton_codes=morton_codes_points
+    )
+    Nvox = voxel_info['Nvox']
+    sort_idx = voxel_info['sort_idx']
+
+    # --- (c) Merging ---
+    cluster_indices = sort_idx.int()
+    cluster_offsets = torch.cat([
+        voxel_indices,
+        torch.tensor([N], dtype=torch.int32, device=device)
+    ]).int()
+
+    merged_means, merged_quats, merged_scales, merged_opacities, merged_colors = \
+        merge_gaussian_clusters_with_indices(
+            params['means'], params['quats'], params['scales'],
+            params['opacities'], params['colors'],
+            cluster_indices, cluster_offsets, weight_by_opacity=True
+        )
+
+    V = PCvox[:, :3]
+    morton_codes_voxels = voxel_info.get('voxel_morton_codes')
+    morton_codes_for_raht = morton_codes_voxels
+
+    # --- (d) Position encoding ---
+    compressed_positions = None
+    position_compressed_bytes = 0
+
+    morton_codes_sorted_uint64 = morton_codes_voxels.to(torch.uint64)
+    compress_result = compress_positions_gpu_resident(
+        morton_codes=morton_codes_sorted_uint64,
+        octree_depth=J, voxel_grid_depth=J,
+        force_64bit_codes=True, device=device_id
+    )
+    compressed_positions = compress_result['compressed_data']
+    position_compressed_bytes = compress_result['compressed_size_bytes']
+    assert position_compressed_bytes == compressed_positions.shape[0], "Position compressed bytes mismatch"
+
+    # --- (e) RAHT ---
+     # Apply color space transform + normalization to SH coefficients before RAHT
+    # All paths normalize first, then optionally apply color transform
+    klt_info = None
+    norm_range_str = "[0, 255]" if apply_color_rescale else "[0, 1]"
+
+    target_range = 255.0 if apply_color_rescale else 1.0
+    merged_colors_normalized, sh_norm_info = normalize_attributes(
+        merged_colors, target_range=target_range
+    )
+
+    if sh_color_space == "rgb":
+        merged_colors_transformed = merged_colors_normalized
+        print(f"  SH color space: RGB (min/max normalize to {norm_range_str})")
+    elif sh_color_space == "yuv":
+        merged_colors_transformed = rgb_to_yuv(merged_colors_normalized)
+        print(f"  SH color space: YUV (min/max normalize to {norm_range_str} + RGB->YUV)")
+    elif sh_color_space == "klt":
+        klt_info = compute_klt_matrices_per_degree(merged_colors_normalized)
+        merged_colors_transformed = rgb_to_klt(merged_colors_normalized, klt_info)
+        print(f"  SH color space: KLT (min/max normalize to {norm_range_str} + per-degree PCA)")
+    else:
+        raise ValueError(f"Invalid sh_color_space: {sh_color_space}")
+
+    attributes_to_compress = torch.cat([
+        merged_quats,
+        merged_scales,
+        merged_opacities.unsqueeze(1),
+        merged_colors_transformed,
+    ], dim=1)
+
+    # Convert to specified precision for CUDA RAHT
+    print(f"  Using {precision.upper()} precision for RAHT")
+    attributes_to_compress = attributes_to_compress.to(float_precision_type)
+
+    ListC, FlagsC, weightsC, order_RAGFT = raht_cuda.raht_prelude(
+        morton_codes_for_raht, J, Nvox
+    )
+    Coeff = raht_cuda.raht_transform(
+        attributes_to_compress, ListC, FlagsC, weightsC, inverse=False
+    )
+
+    # --- (f) Quantization ---
+    n_channels = Coeff.shape[1]
+    num_sh_coeffs = n_channels - 8
+    num_sh_dc = min(3, num_sh_coeffs)
+    num_sh_rest = max(0, num_sh_coeffs - 3)
+
+    quantize_step_tensor = torch.zeros(1, n_channels, dtype=float_precision_type, device=device)
+    quantize_step_tensor[0, 0:4] = quantize_step['quats']
+    quantize_step_tensor[0, 4:7] = quantize_step['scales']
+    quantize_step_tensor[0, 7] = quantize_step['opacity']
+
+    sh_dc_qstep = quantize_step['sh_dc']
+    if isinstance(sh_dc_qstep, (list, tuple)):
+        for i, q in enumerate(sh_dc_qstep):
+            quantize_step_tensor[0, 8 + i] = q
+    else:
+        quantize_step_tensor[0, 8:8 + num_sh_dc] = sh_dc_qstep
+
+    sh_rest_qstep = quantize_step['sh_rest']
+    if num_sh_rest > 0:
+        if isinstance(sh_rest_qstep, (list, tuple)):
+            for i, q in enumerate(sh_rest_qstep):
+                quantize_step_tensor[0, 8 + num_sh_dc + i] = q
+        else:
+            quantize_step_tensor[0, 8 + num_sh_dc:] = sh_rest_qstep
+    
+    # Compute per-channel min-max normalization statistics
+    channel_min = Coeff.min(dim=0, keepdim=True)[0]  # [1, n_channels]
+    channel_max = Coeff.max(dim=0, keepdim=True)[0]  # [1, n_channels]
+    channel_range = channel_max - channel_min
+    # Avoid division by zero for channels with zero range
+    channel_range = torch.where(channel_range > 1e-10, channel_range, torch.ones_like(channel_range))
+
+    # Normalize coefficients to [0, 1] before quantization
+    Coeff_normalized = (Coeff - channel_min) / channel_range
+    Coeff_enc = torch.floor(Coeff_normalized / quantize_step_tensor + 0.5)
+
+    # Coefficient reordering for encoding
+    coeff_reordered = Coeff_enc.index_select(0, order_RAGFT)
+
+    # --- (g) RLGR GPU encoding ---
+    coeff_gpu_int32 = coeff_reordered.to(dtype=torch.int32)
+    encoder_gpu = rlgr_gpu.EncoderGPU(block_size=rlgr_block_size, flagSigned=0)
+    compressed_gpu = encoder_gpu.rlgrEncode(coeff_gpu_int32)
+
+    attribute_compressed_bytes = compressed_gpu['compressed_data'].shape[0]
+    total_compressed_bytes = position_compressed_bytes + attribute_compressed_bytes
+
+    return {
+        'compressed_gpu': compressed_gpu,
+        'compressed_positions': compressed_positions,
+        'quantize_step_tensor': quantize_step_tensor,
+        'channel_min': channel_min,
+        'channel_range': channel_range,
+        'J': J,
+        'N_original': N,
+        'voxel_info': voxel_info,
+        'Nvox': Nvox,
+        'sh_norm_info': sh_norm_info,
+        'klt_info': klt_info,
+        'sh_color_space': sh_color_space,
+        'total_compressed_bytes': total_compressed_bytes,
+        'attribute_compressed_bytes': attribute_compressed_bytes,
+        'position_compressed_bytes': position_compressed_bytes,
+        'float_precision_type': float_precision_type,
+    }
+
+
+def decode_livogs(compressed_state, device='cuda:0', device_id=0):
+    """Decode compressed state using LiVoGS (all on GPU).
+
+    Steps:
+        a. RLGR GPU decoding
+        b. Dequantization
+        c. Position decoding (GPU Octree codec)
+        d. RAHT prelude (decoder-side, from decoded positions)
+        e. iRAHT (inverse RAHT)
+        f. Reconstruct gaussian splat model
+
+    Returns reconstructed params dict (all tensors on GPU).
+    """
+    compressed_gpu = compressed_state['compressed_gpu']
+    compressed_positions = compressed_state['compressed_positions']
+    J = compressed_state['J']
+    voxel_info = compressed_state['voxel_info']
+    sh_norm_info = compressed_state['sh_norm_info']
+    klt_info = compressed_state['klt_info']
+    sh_color_space = compressed_state['sh_color_space']
+    quantize_step_tensor = compressed_state['quantize_step_tensor']
+    float_precision_type = compressed_state['float_precision_type']
+    channel_range = compressed_state['channel_range']
+    channel_min = compressed_state['channel_min']
+
+    # --- (a) RLGR GPU decoding ---
+    decoder_gpu = rlgr_gpu.DecoderGPU()
+    decoded_gpu_tensor, _ = decoder_gpu.rlgrDecode(compressed_gpu)
+
+    # --- (b) Dequantization ---
+    Coeff_dec = decoded_gpu_tensor.to(dtype=float_precision_type) * quantize_step_tensor
+    Coeff_dec = Coeff_dec * channel_range + channel_min
+
+    # --- (c) Position decoding ---
+    decompress_result = decompress_positions_gpu_resident(
+        compressed_data=compressed_positions,
+        octree_depth=J, voxel_grid_depth=J,
+        force_64bit_codes=True, device=device_id
+    )
+    V_decompressed = decompress_result['positions']
+    if V_decompressed.dtype == torch.uint32:
+        V_decompressed = V_decompressed.to(torch.int32)
+    V_for_decode = V_decompressed.to(dtype=torch.float32)
+
+    # --- (d) RAHT prelude (decoder-side) ---
+    V_dec_int = V_for_decode.int()
+    morton_result_dec = calc_morton(
+        V_dec_int, voxel_grid_depth=J,
+        force_64bit_codes=True, device=device_id, return_torch=True
+    )
+    morton_codes_for_decode = morton_result_dec['morton_codes']
+    if morton_codes_for_decode.dtype == torch.uint64:
+        morton_codes_for_decode = morton_codes_for_decode.to(torch.int64)
+
+    Nvox_dec = morton_codes_for_decode.shape[0]
+    ListC_dec, FlagsC_dec, weightsC_dec, order_RAGFT_dec = raht_cuda.raht_prelude(
+        morton_codes_for_decode, J, Nvox_dec
+    )
+
+    # --- (e) iRAHT (inverse RAHT) ---
+    order_RAGFT_inv = torch.argsort(order_RAGFT_dec)
+    Coeff_to_decompress = Coeff_dec[order_RAGFT_inv, :]
+
+    attributes_reconstructed = raht_cuda.raht_transform(
+        Coeff_to_decompress, ListC_dec, FlagsC_dec, weightsC_dec, inverse=True
+    )
+
+    # --- (f) Reconstruct gaussian splat model ---
+    recon_quats_raw = attributes_reconstructed[:, 0:4]
+    recon_scales_raw = attributes_reconstructed[:, 4:7]
+    recon_opacities_raw = attributes_reconstructed[:, 7]
+    recon_colors_sh_raw = attributes_reconstructed[:, 8:]
+
+    V_final = V_for_decode
+
+    # Inverse color space transform
+    if sh_color_space == "yuv":
+        recon_colors_sh_raw = yuv_to_rgb(recon_colors_sh_raw)
+    elif sh_color_space == "klt":
+        recon_colors_sh_raw = klt_to_rgb(recon_colors_sh_raw, klt_info)
+    recon_colors_sh_raw = denormalize_attributes(recon_colors_sh_raw, sh_norm_info)
+
+    # World-space positions from voxel coordinates
+    voxel_positions_world = (V_final + 0.5) * voxel_info['voxel_size'] + voxel_info['vmin']
+    recon_means = voxel_positions_world
+    # Use F.normalize to safely handle edge cases (e.g., zero-norm quaternions)
+    recon_quats = F.normalize(recon_quats_raw, p=2, dim=1)
+    recon_scales = torch.abs(recon_scales_raw)
+    recon_opacities = torch.clamp(recon_opacities_raw, 0, 1)
+    recon_colors = recon_colors_sh_raw
+
+    return {
+        'means': recon_means.float(),
+        'quats': recon_quats.float(),
+        'scales': recon_scales.float(),
+        'opacities': recon_opacities.float(),
+        'colors': recon_colors.float(),
+    }
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="LiVoGS compress + decompress for VideoGS-trained models"
+    )
+    parser.add_argument("--ply_path", type=str, required=True,
+                        help="Path to checkpoint dir containing frame folders (0, 1, ...)")
+    parser.add_argument("--output_folder", type=str, required=True,
+                        help="Folder for benchmark CSV and metadata")
+    parser.add_argument("--output_ply_folder", type=str, required=True,
+                        help="Folder for decompressed PLY output")
+    parser.add_argument("--frame_start", type=int, default=0)
+    parser.add_argument("--frame_end", type=int, default=200)
+    parser.add_argument("--interval", type=int, default=1)
+    parser.add_argument("--sh_degree", type=int, default=3)
+    # LiVoGS-specific parameters
+    parser.add_argument("--J", type=int, default=10,
+                        help="Octree depth for voxelization (default: 10)")
+    parser.add_argument("--quantize_step", type=float, default=0.0001,
+                        help="Uniform quantization step for all attributes (default: 0.0001)")
+    parser.add_argument("--quantize_step_quats", type=float, default=None,
+                        help="Override quantization step for quaternions")
+    parser.add_argument("--quantize_step_scales", type=float, default=None,
+                        help="Override quantization step for scales")
+    parser.add_argument("--quantize_step_opacity", type=float, default=None,
+                        help="Override quantization step for opacity")
+    parser.add_argument("--quantize_step_sh_dc", type=float, default=None,
+                        help="Override quantization step for SH DC")
+    parser.add_argument("--quantize_step_sh_rest", type=float, default=None,
+                        help="Override quantization step for SH rest")
+    parser.add_argument("--sh_color_space", type=str, default="rgb",
+                        choices=["rgb", "yuv", "klt"],
+                        help="Color space for SH coefficients (default: rgb)")
+    parser.add_argument("--color_rescale", action="store_true", default=True,
+                        help="Rescale SH to [0, 255] before color transform (default: True)")
+    parser.add_argument("--no_color_rescale", action="store_true",
+                        help="Disable SH color rescaling")
+    parser.add_argument("--rlgr_block_size", type=int, default=4096,
+                        help="RLGR parallel block size (default: 4096)")
+    parser.add_argument("--device", type=str, default="cuda:0")
+    args = parser.parse_args()
+
+    if args.no_color_rescale:
+        args.color_rescale = False
+
+    # Build quantize_step dict
+    qs = args.quantize_step
+    quantize_step = {
+        'quats': args.quantize_step_quats if args.quantize_step_quats is not None else qs,
+        'scales': args.quantize_step_scales if args.quantize_step_scales is not None else qs,
+        'opacity': args.quantize_step_opacity if args.quantize_step_opacity is not None else qs,
+        'sh_dc': args.quantize_step_sh_dc if args.quantize_step_sh_dc is not None else qs,
+        'sh_rest': args.quantize_step_sh_rest if args.quantize_step_sh_rest is not None else qs,
+    }
+
+    device = args.device
+    if device.startswith('cuda:'):
+        device_id = int(device.split(':')[1])
+    else:
+        device_id = torch.cuda.current_device() if torch.cuda.is_available() else 0
+
+    os.makedirs(args.output_folder, exist_ok=True)
+    os.makedirs(args.output_ply_folder, exist_ok=True)
+
+    # Print configuration
+    print("=" * 70)
+    print("LiVoGS Compress + Decompress Pipeline")
+    print("=" * 70)
+    print(f"  PLY path:           {args.ply_path}")
+    print(f"  Output folder:      {args.output_folder}")
+    print(f"  Output PLY folder:  {args.output_ply_folder}")
+    print(f"  Frames:             {args.frame_start} to {args.frame_end} (interval={args.interval})")
+    print(f"  SH degree:          {args.sh_degree}")
+    print(f"  Device:             {device}")
+    print(f"  J (octree depth):   {args.J}")
+    print(f"  Quantize steps:     quats={quantize_step['quats']}, scales={quantize_step['scales']}, "
+          f"opacity={quantize_step['opacity']}, sh_dc={quantize_step['sh_dc']}, sh_rest={quantize_step['sh_rest']}")
+    print(f"  SH color space:     {args.sh_color_space}")
+    print(f"  Color rescale:      {args.color_rescale}")
+    print(f"  RLGR block size:    {args.rlgr_block_size}")
+    print("=" * 70)
+
+    # Warmup GPU
+    print("Warmup GPU...")
+    frame = args.frame_start
+    ckpt_path = os.path.join(args.ply_path, str(frame), "point_cloud")
+    if not os.path.exists(ckpt_path):
+        print(f"Warning: Checkpoint not found: {ckpt_path}, skipping frame {frame}")
+        raise ValueError(f"Checkpoint not found: {ckpt_path}")
+    max_iter = searchForMaxIteration(ckpt_path)
+    ply_file_path = os.path.join(ckpt_path, f"iteration_{max_iter}", "point_cloud.ply")
+
+    params = load_videogs_ply(ply_file_path, device=device)
+
+    torch.cuda.synchronize(device_id)
+    compressed_state = encode_livogs(
+        params, J=args.J, device=device, device_id=device_id,
+        sh_color_space=args.sh_color_space,
+        color_rescale=args.color_rescale,
+        quantize_step=quantize_step,
+        rlgr_block_size=args.rlgr_block_size,
+    )
+    torch.cuda.synchronize(device_id)
+
+    decoded_params = decode_livogs(compressed_state, device=device, device_id=device_id)
+
+    torch.cuda.synchronize(device_id)
+    print("Warmup GPU done.")
+
+    benchmark_rows = []
+
+    for frame in tqdm(range(args.frame_start, args.frame_end, args.interval), desc="Frames"):
+
+        # --- 1. Load PLY (not timed) ---
+        ckpt_path = os.path.join(args.ply_path, str(frame), "point_cloud")
+        if not os.path.exists(ckpt_path):
+            print(f"Warning: Checkpoint not found: {ckpt_path}, skipping frame {frame}")
+            continue
+        max_iter = searchForMaxIteration(ckpt_path)
+        ply_file_path = os.path.join(ckpt_path, f"iteration_{max_iter}", "point_cloud.ply")
+
+        params = load_videogs_ply(ply_file_path, device=device)
+        N_original = params['means'].shape[0]
+
+        # --- 2. Encode (timed) ---
+        torch.cuda.synchronize(device_id)
+        t_enc_start = time.perf_counter()
+
+        compressed_state = encode_livogs(
+            params, J=args.J, device=device, device_id=device_id,
+            sh_color_space=args.sh_color_space,
+            color_rescale=args.color_rescale,
+            quantize_step=quantize_step,
+            rlgr_block_size=args.rlgr_block_size,
+        )
+
+        torch.cuda.synchronize(device_id)
+        t_enc_end = time.perf_counter()
+        encode_time_ms = (t_enc_end - t_enc_start) * 1000
+
+        Nvox = compressed_state['Nvox']
+        compressed_size_bytes = compressed_state['total_compressed_bytes']
+
+        # --- 3. Decode (timed) ---
+        t_dec_start = time.perf_counter()
+
+        decoded_params = decode_livogs(compressed_state, device=device, device_id=device_id)
+
+        torch.cuda.synchronize(device_id)
+        t_dec_end = time.perf_counter()
+        decode_time_ms = (t_dec_end - t_dec_start) * 1000
+
+        # --- 4. Save PLY (not timed) ---
+        frame_ply_folder = os.path.join(args.output_ply_folder, str(frame), "point_cloud")
+        os.makedirs(frame_ply_folder, exist_ok=True)
+        ply_out_path = os.path.join(frame_ply_folder, "point_cloud.ply")
+        save_videogs_ply(decoded_params, ply_out_path, args.sh_degree)
+
+        benchmark_rows.append({
+            "frame": frame,
+            "encode_time_ms": encode_time_ms,
+            "decode_time_ms": decode_time_ms,
+            "original_points": N_original,
+            "voxelized_points": Nvox,
+            "compressed_size_bytes": compressed_size_bytes,
+        })
+
+        tqdm.write(
+            f"  Frame {frame}: N={N_original}→{Nvox} voxels, "
+            f"enc={encode_time_ms:.2f} ms, dec={decode_time_ms:.2f} ms, "
+            f"size={compressed_size_bytes / 1024 / 1024:.2f} MB"
+        )
+
+        # Clean up
+        del params, compressed_state, decoded_params
+        torch.cuda.empty_cache()
+
+    # --- Benchmark CSV and summary ---
+    if benchmark_rows:
+        csv_path = os.path.join(args.output_folder, "benchmark_livogs.csv")
+        with open(csv_path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["frame_id", "encode_time_ms", "decode_time_ms",
+                         "original_points", "voxelized_points", "compressed_size_bytes"])
+            for r in benchmark_rows:
+                w.writerow([
+                    r["frame"],
+                    f"{r['encode_time_ms']:.2f}",
+                    f"{r['decode_time_ms']:.2f}",
+                    r["original_points"],
+                    r["voxelized_points"],
+                    r["compressed_size_bytes"],
+                ])
+
+        n = len(benchmark_rows)
+        total_enc_ms = sum(r["encode_time_ms"] for r in benchmark_rows)
+        total_dec_ms = sum(r["decode_time_ms"] for r in benchmark_rows)
+        total_size = sum(r["compressed_size_bytes"] for r in benchmark_rows)
+        total_orig_points = sum(r["original_points"] for r in benchmark_rows)
+        total_vox_points = sum(r["voxelized_points"] for r in benchmark_rows)
+
+        # Save config JSON for reproducibility
+        import json
+        config = {
+            "J": args.J,
+            "quantize_step": quantize_step,
+            "sh_color_space": args.sh_color_space,
+            "color_rescale": args.color_rescale,
+            "rlgr_block_size": args.rlgr_block_size,
+            "sh_degree": args.sh_degree,
+            "frame_start": args.frame_start,
+            "frame_end": args.frame_end,
+            "interval": args.interval,
+        }
+        with open(os.path.join(args.output_folder, "livogs_config.json"), "w") as f:
+            json.dump(config, f, indent=4)
+
+        print("\n" + "=" * 70)
+        print("Benchmark Summary (LiVoGS compress + decompress)")
+        print("=" * 70)
+        print(f"  Frames processed:          {n}")
+        print(f"  Total encode time:         {total_enc_ms / 1000:.2f} s  (avg {total_enc_ms / n:.2f} ms/frame)")
+        print(f"  Total decode time:         {total_dec_ms / 1000:.2f} s  (avg {total_dec_ms / n:.2f} ms/frame)")
+        print(f"  Total compressed size:     {total_size / 1024 / 1024:.2f} MB  (avg {total_size / n / 1024 / 1024:.2f} MB/frame)")
+        print(f"  Avg point reduction:       {total_orig_points / n:.0f} → {total_vox_points / n:.0f} "
+              f"({total_orig_points / total_vox_points:.2f}x)")
+        print(f"  CSV: {csv_path}")
+        print("=" * 70)
+    else:
+        print("No frames were processed.")
+
+    print("Done.")

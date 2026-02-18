@@ -81,12 +81,22 @@ def main():
     ax.plot(x, video_sizes_mb, "s-", label="MP4 size (avg/frame)", color="coral", markersize=4)
     ax.set_xlabel("Frame")
     ax.set_ylabel("Size (MB)")
-    ax.set_title("Compressed size per frame")
+    ax.set_title(f"VideoGS compressed size per frame [QP={args.qp}]")
     tick_every = 5
     ax.set_xticks(x[::tick_every])
     ax.set_xticklabels(frame_ids[::tick_every], rotation=90)
     ax.legend()
     ax.grid(True, alpha=0.3)
+
+    avg_png = sum(png_sizes_mb) / len(png_sizes_mb)
+    avg_mp4 = sum(video_sizes_mb) / len(video_sizes_mb)
+    ax.annotate(
+        f"avg PNG={avg_png:.2f} MB, avg MP4={avg_mp4:.2f} MB/frame",
+        xy=(0.02, 0.95), xycoords="axes fraction",
+        fontsize=9, va="top",
+        bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8),
+    )
+
     fig.tight_layout()
 
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
