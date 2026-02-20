@@ -1,3 +1,7 @@
+"""
+Train VideoGS with aabb_scale and marching_cubes_res. This is necessary for training on ActorsHQ dataset, otherwise the head of the person will be clipped.
+"""
+
 import os
 import argparse
 import shutil
@@ -19,6 +23,8 @@ if __name__ == '__main__':
     parser.add_argument('--interval', type=str, default='')
     parser.add_argument('--group_size', type=str, default='')
     parser.add_argument('--resolution', type=int, default=2)
+    parser.add_argument('--marching_cubes_res', type=int, default=None,
+                        help='NeuS2 marching cubes grid resolution (500³ default). Use 1000 for ActorsHQ (aabb_scale=2) to match HiFi4G mesh density.')
     args = parser.parse_args()
 
     print(args.start, args.end)
@@ -38,6 +44,10 @@ if __name__ == '__main__':
         transforms = json.load(f)
     aabb_scale = int(transforms.get("aabb_scale", 1))
     print(f"Using aabb_scale: {aabb_scale}")
+
+    # Include aabb_scale in marching_cubes_res for consistent mesh density. Needed for ActorsHQ where aabb_scale=2.
+    marching_cubes_res = int(args.marching_cubes_res) if args.marching_cubes_res is not None else (500 * aabb_scale)
+    print(f"Using marching_cubes_res: {marching_cubes_res}")
 
     # neus2_meshlab_filter_path = os.path.join(data_root_path, "luoxi_filter.mlx")
 
@@ -62,9 +72,9 @@ if __name__ == '__main__':
         frame_neus2_mesh_output_path = os.path.join(frame_neus2_output_path, "points3d.obj")
         
         """NeuS2"""
-        # neus2 command
+        # neus2 command (higher marching_cubes_res when using aabb_scale=2 for denser mesh)
         script_path = "scripts/run.py"
-        neus2_command = f"cd external/NeuS2_K && CUDA_VISIBLE_DEVICES={card_id} python {script_path} --scene {frame_path} --name neus --mode nerf --save_snapshot {frame_neus2_ckpt_output_path} --save_mesh --save_mesh_path {frame_neus2_mesh_output_path} && cd ../.."
+        neus2_command = f"cd external/NeuS2_K && CUDA_VISIBLE_DEVICES={card_id} python {script_path} --scene {frame_path} --name neus --mode nerf --save_snapshot {frame_neus2_ckpt_output_path} --save_mesh --save_mesh_path {frame_neus2_mesh_output_path} --marching_cubes_res {marching_cubes_res} && cd ../.."
         os.system(neus2_command)
         delete_neus2_output_path = os.path.join(frame_path, "output")
         shutil.rmtree(delete_neus2_output_path)
@@ -95,7 +105,7 @@ if __name__ == '__main__':
         
         test_iterations = " ".join(str(t) for t in [7000, 12000, 20000, 30000])
         first_gaussian_command = f"CUDA_VISIBLE_DEVICES={card_id} python train.py -s {frame_path} -m {frame_model_path} --iterations {first_frame_iteration} --save_iterations {first_frame_save_iterations} --test_iterations {test_iterations} --sh_degree {sh} -r {resolution_scale} --port 600{card_id}"
-        # print(first_gaussian_command)
+        print(first_gaussian_command)
         os.system(first_gaussian_command)
 
         # prune

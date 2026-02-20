@@ -1,10 +1,10 @@
 import os
 import argparse
 import shutil
+import json
 import pymeshlab
 import open3d as o3d
 import numpy as np
-import json
 
 # group_size = 10
 
@@ -19,6 +19,9 @@ if __name__ == '__main__':
     parser.add_argument('--interval', type=str, default='')
     parser.add_argument('--group_size', type=str, default='')
     parser.add_argument('--resolution', type=int, default=2)
+    parser.add_argument('--aabb_scale', type=int, default=2, help='NeRF AABB scale (1=unit cube). Use 2 or 4 for ActorsHQ to avoid head clipping.')
+    parser.add_argument('--marching_cubes_res', type=int, default=None,
+                        help='NeuS2 marching cubes grid resolution. Default: 500*aabb_scale (e.g. 1000 when aabb_scale=2) for consistent mesh density.')
     args = parser.parse_args()
 
     print(args.start, args.end)
@@ -31,13 +34,8 @@ if __name__ == '__main__':
     interval = int(args.interval)
     group_size = int(args.group_size)
     resolution_scale = int(args.resolution)
-
-    # Read aabb_scale from transforms.json of the first frame
-    transforms_path = os.path.join(data_root_path, str(args.start), "transforms.json")
-    with open(transforms_path, "r") as f:
-        transforms = json.load(f)
-    aabb_scale = int(transforms.get("aabb_scale", 1))
-    print(f"Using aabb_scale: {aabb_scale}")
+    aabb_scale = int(args.aabb_scale)
+    marching_cubes_res = int(args.marching_cubes_res) if args.marching_cubes_res is not None else (500 * aabb_scale)
 
     # neus2_meshlab_filter_path = os.path.join(data_root_path, "luoxi_filter.mlx")
 
@@ -62,9 +60,9 @@ if __name__ == '__main__':
         frame_neus2_mesh_output_path = os.path.join(frame_neus2_output_path, "points3d.obj")
         
         """NeuS2"""
-        # neus2 command
+        # neus2 command (marching_cubes_res scaled by aabb_scale for consistent mesh density)
         script_path = "scripts/run.py"
-        neus2_command = f"cd external/NeuS2_K && CUDA_VISIBLE_DEVICES={card_id} python {script_path} --scene {frame_path} --name neus --mode nerf --save_snapshot {frame_neus2_ckpt_output_path} --save_mesh --save_mesh_path {frame_neus2_mesh_output_path} && cd ../.."
+        neus2_command = f"cd ../../external/NeuS2_K && CUDA_VISIBLE_DEVICES={card_id} python {script_path} --scene {frame_path} --name neus --mode nerf --save_snapshot {frame_neus2_ckpt_output_path} --save_mesh --save_mesh_path {frame_neus2_mesh_output_path} --marching_cubes_res {marching_cubes_res} && cd ../../scripts/test"
         os.system(neus2_command)
         delete_neus2_output_path = os.path.join(frame_path, "output")
         shutil.rmtree(delete_neus2_output_path)
@@ -84,27 +82,3 @@ if __name__ == '__main__':
         ms.generate_simplified_point_cloud(samplenum = 100000) 
         frame_points3d_output_path = os.path.join(frame_path, "points3d.ply")
         ms.save_current_mesh(frame_points3d_output_path, binary = True, save_vertex_normal = False)
-
-
-        """ Gaussian """
-        # generate output
-        frame_model_path = os.path.join(gaussian_output_path, str(i))
-        first_frame_iteration = 12000 # Original setting by the authors of VideoGS
-        # first_frame_iteration = 30000
-        first_frame_save_iterations = first_frame_iteration
-        
-        test_iterations = " ".join(str(t) for t in [7000, 12000, 20000, 30000])
-        first_gaussian_command = f"CUDA_VISIBLE_DEVICES={card_id} python train.py -s {frame_path} -m {frame_model_path} --iterations {first_frame_iteration} --save_iterations {first_frame_save_iterations} --test_iterations {test_iterations} --sh_degree {sh} -r {resolution_scale} --port 600{card_id}"
-        # print(first_gaussian_command)
-        os.system(first_gaussian_command)
-
-        # prune
-        prune_iterations = 4000
-        prune_gaussian_command = f"CUDA_VISIBLE_DEVICES={card_id} python prune_gaussian.py -s {frame_path} -m {frame_model_path} --sh_degree {sh} -r {resolution_scale} --iterations {prune_iterations}"
-        os.system(prune_gaussian_command)
-
-        # rest frame
-        dynamic_command = f"CUDA_VISIBLE_DEVICES={card_id} python train_dynamic.py -s {data_root_path} -m {gaussian_output_path} --sh_degree {sh} -r {resolution_scale} --st {group_start} --ed {group_end} --interval {interval}"
-        os.system(dynamic_command)
-
-        print(f"Finish {group_start} to {group_end}")

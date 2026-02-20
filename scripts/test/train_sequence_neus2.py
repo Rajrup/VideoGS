@@ -1,10 +1,10 @@
 import os
 import argparse
 import shutil
-import json
 import pymeshlab
 import open3d as o3d
 import numpy as np
+import json
 
 # group_size = 10
 
@@ -19,9 +19,6 @@ if __name__ == '__main__':
     parser.add_argument('--interval', type=str, default='')
     parser.add_argument('--group_size', type=str, default='')
     parser.add_argument('--resolution', type=int, default=2)
-    parser.add_argument('--aabb_scale', type=int, default=2, help='NeRF AABB scale (1=unit cube). Use 2 or 4 for ActorsHQ to avoid head clipping.')
-    parser.add_argument('--marching_cubes_res', type=int, default=None,
-                        help='NeuS2 marching cubes grid resolution. Default: 500*aabb_scale (e.g. 1000 when aabb_scale=2) for consistent mesh density.')
     args = parser.parse_args()
 
     print(args.start, args.end)
@@ -34,8 +31,13 @@ if __name__ == '__main__':
     interval = int(args.interval)
     group_size = int(args.group_size)
     resolution_scale = int(args.resolution)
-    aabb_scale = int(args.aabb_scale)
-    marching_cubes_res = int(args.marching_cubes_res) if args.marching_cubes_res is not None else (500 * aabb_scale)
+
+    # Read aabb_scale from transforms.json of the first frame
+    transforms_path = os.path.join(data_root_path, str(args.start), "transforms.json")
+    with open(transforms_path, "r") as f:
+        transforms = json.load(f)
+    aabb_scale = int(transforms.get("aabb_scale", 1))
+    print(f"Using aabb_scale: {aabb_scale}")
 
     # neus2_meshlab_filter_path = os.path.join(data_root_path, "luoxi_filter.mlx")
 
@@ -60,9 +62,9 @@ if __name__ == '__main__':
         frame_neus2_mesh_output_path = os.path.join(frame_neus2_output_path, "points3d.obj")
         
         """NeuS2"""
-        # neus2 command (marching_cubes_res scaled by aabb_scale for consistent mesh density)
+        # neus2 command
         script_path = "scripts/run.py"
-        neus2_command = f"cd ../external/NeuS2_K && CUDA_VISIBLE_DEVICES={card_id} python {script_path} --scene {frame_path} --name neus --mode nerf --save_snapshot {frame_neus2_ckpt_output_path} --save_mesh --save_mesh_path {frame_neus2_mesh_output_path} --marching_cubes_res {marching_cubes_res} && cd ../.."
+        neus2_command = f"cd ../../external/NeuS2_K && CUDA_VISIBLE_DEVICES={card_id} python {script_path} --scene {frame_path} --name neus --mode nerf --save_snapshot {frame_neus2_ckpt_output_path} --save_mesh --save_mesh_path {frame_neus2_mesh_output_path} && cd ../../scripts/test"
         os.system(neus2_command)
         delete_neus2_output_path = os.path.join(frame_path, "output")
         shutil.rmtree(delete_neus2_output_path)

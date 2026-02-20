@@ -2,13 +2,13 @@
 GPU_ID=0
 wordir="/home/rajrup/Project/VideoGS"
 datadir="/synology/rajrup/VideoGS"
-logdir="${wordir}/scripts/logs"
+logdir="${wordir}/scripts/test/logs"
 
 mkdir -p ${logdir}
-LOG_FILE="${logdir}/train_sequence_neus2_$(date +%Y%m%d_%H%M%S).log"
+LOG_FILE="${logdir}/train_sequence_neus2_actorshq_$(date +%Y%m%d_%H%M%S).log"
 
 # Use script command for proper tqdm support
-script -q -c "python train_sequence_neus2.py \
+script -q -c "python train_sequence_neus2_actorshq.py \
     --start 0 \
     --end 20 \
     --cuda ${GPU_ID} \
