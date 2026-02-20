@@ -59,6 +59,8 @@ pip install huggingface_hub
 
 ```bash
 bash preprocess/hifi4g_download.sh
+
+# unzip the downloaded dataset
 ```
 
 ### HiFi4G Dataset Preprocess

@@ -237,3 +237,4 @@ submodules/simple-knn/simple_knn.egg-info
 **/build/
 *.egg-info/
 *.code-workspace
+HiFi4G.png

@@ -2,17 +2,73 @@
 
 conda activate videogs
 current_dir=$(pwd)
-
-move_option="False"
+original_data_dir="/synology/rajrup/Datasets/HiFi4G_Dataset"
+processed_data_dir="/synology/rajrup/VideoGS/HiFi4G_Dataset_processed"
 
 echo "Processing HiFi4G Dataset..."
-python hifi4g_process.py --input /synology/rajrup/Datasets/HiFi4G_Dataset/4K_Actor1_Greeting --output /synology/rajrup/VideoGS/HiFi4G_Dataset_processed/4K_Actor1_Greeting --move $move_option                      # Done
-python hifi4g_process.py --input /synology/rajrup/Datasets/HiFi4G_Dataset/4K_Actor2_Dancing --output /synology/rajrup/VideoGS/HiFi4G_Dataset_processed/4K_Actor2_Dancing --move $move_option                        # Done
-python hifi4g_process.py --input /synology/rajrup/Datasets/HiFi4G_Dataset/4K_Actor3_Violin --output /synology/rajrup/VideoGS/HiFi4G_Dataset_processed/4K_Actor3_Violin --move $move_option                          # Done
-python hifi4g_process.py --input /synology/rajrup/Datasets/HiFi4G_Dataset/4K_Actor4_Dancing --output /synology/rajrup/VideoGS/HiFi4G_Dataset_processed/4K_Actor4_Dancing --move $move_option                       # Done
-python hifi4g_process.py --input /synology/rajrup/Datasets/HiFi4G_Dataset/4K_Actor5_Oil-paper_Umbrella --output /synology/rajrup/VideoGS/HiFi4G_Dataset_processed/4K_Actor5_Oil-paper_Umbrella --move $move_option  # Done 
-python hifi4g_process.py --input /synology/rajrup/Datasets/HiFi4G_Dataset/4K_Actor6_Changing_Clothes --output /synology/rajrup/VideoGS/HiFi4G_Dataset_processed/4K_Actor6_Changing_Clothes --move $move_option      # Done
-python hifi4g_process.py --input /synology/rajrup/Datasets/HiFi4G_Dataset/4K_Actor7_Nunchaku --output /synology/rajrup/VideoGS/HiFi4G_Dataset_processed/4K_Actor7_Nunchaku --move $move_option                     # Done
+
+sequence_name="4K_Actor1_Greeting"
+echo "Processing ${sequence_name}..."
+if [ -d "${original_data_dir}/${sequence_name}/image_white_undistortion/colmap" ]; then
+    mv "${original_data_dir}/${sequence_name}/image_white_undistortion/colmap" "${original_data_dir}/${sequence_name}/"
+    mv "${original_data_dir}/${sequence_name}/colmap/sparse/0/"* "${original_data_dir}/${sequence_name}/colmap/sparse/"
+    rm -rf "${original_data_dir}/${sequence_name}/colmap/sparse/0/"
+fi
+python hifi4g_process.py --input ${original_data_dir}/${sequence_name} --output ${processed_data_dir}/${sequence_name}
+
+sequence_name="4K_Actor2_Dancing"
+echo "Processing ${sequence_name}..."
+if [ -d "${original_data_dir}/${sequence_name}/image_white_undistortion/colmap" ]; then
+    mv "${original_data_dir}/${sequence_name}/image_white_undistortion/colmap" "${original_data_dir}/${sequence_name}/"
+    mv "${original_data_dir}/${sequence_name}/colmap/sparse/0/"* "${original_data_dir}/${sequence_name}/colmap/sparse/"
+    rm -rf "${original_data_dir}/${sequence_name}/colmap/sparse/0/"
+fi
+python hifi4g_process.py --input ${original_data_dir}/${sequence_name} --output ${processed_data_dir}/${sequence_name}
+
+sequence_name="4K_Actor3_Violin"
+echo "Processing ${sequence_name}..."
+if [ -d "${original_data_dir}/${sequence_name}/image_white_undistortion/colmap" ]; then
+    mv "${original_data_dir}/${sequence_name}/image_white_undistortion/colmap" "${original_data_dir}/${sequence_name}/"
+    mv "${original_data_dir}/${sequence_name}/colmap/sparse/0/"* "${original_data_dir}/${sequence_name}/colmap/sparse/"
+    rm -rf "${original_data_dir}/${sequence_name}/colmap/sparse/0/"
+fi
+python hifi4g_process.py --input ${original_data_dir}/${sequence_name} --output ${processed_data_dir}/${sequence_name} 
+
+sequence_name="4K_Actor4_Dancing"
+echo "Processing ${sequence_name}..."
+if [ -d "${original_data_dir}/${sequence_name}/image_white_undistortion/colmap" ]; then
+    mv "${original_data_dir}/${sequence_name}/image_white_undistortion/colmap" "${original_data_dir}/${sequence_name}/"
+    mv "${original_data_dir}/${sequence_name}/colmap/sparse/0/"* "${original_data_dir}/${sequence_name}/colmap/sparse/"
+    rm -rf "${original_data_dir}/${sequence_name}/colmap/sparse/0/"
+fi
+python hifi4g_process.py --input ${original_data_dir}/${sequence_name} --output ${processed_data_dir}/${sequence_name} 
+
+sequence_name="4K_Actor5_Oil-paper_Umbrella"
+echo "Processing ${sequence_name}..."
+if [ -d "${original_data_dir}/${sequence_name}/image_white_undistortion/colmap" ]; then
+    mv "${original_data_dir}/${sequence_name}/image_white_undistortion/colmap" "${original_data_dir}/${sequence_name}/"
+    mv "${original_data_dir}/${sequence_name}/colmap/sparse/0/"* "${original_data_dir}/${sequence_name}/colmap/sparse/"
+    rm -rf "${original_data_dir}/${sequence_name}/colmap/sparse/0/"
+fi
+python hifi4g_process.py --input ${original_data_dir}/${sequence_name} --output ${processed_data_dir}/${sequence_name} 
+
+sequence_name="4K_Actor6_Changing_Clothes"
+echo "Processing ${sequence_name}..."
+if [ -d "${original_data_dir}/${sequence_name}/image_white_undistortion/colmap" ]; then
+    mv "${original_data_dir}/${sequence_name}/image_white_undistortion/colmap" "${original_data_dir}/${sequence_name}/"
+    mv "${original_data_dir}/${sequence_name}/colmap/sparse/0/"* "${original_data_dir}/${sequence_name}/colmap/sparse/"
+    rm -rf "${original_data_dir}/${sequence_name}/colmap/sparse/0/"
+fi
+python hifi4g_process.py --input ${original_data_dir}/${sequence_name} --output ${processed_data_dir}/${sequence_name} 
+
+sequence_name="4K_Actor7_Nunchaku"
+echo "Processing ${sequence_name}..."
+if [ -d "${original_data_dir}/${sequence_name}/image_white_undistortion/colmap" ]; then
+    mv "${original_data_dir}/${sequence_name}/image_white_undistortion/colmap" "${original_data_dir}/${sequence_name}/"
+    mv "${original_data_dir}/${sequence_name}/colmap/sparse/0/"* "${original_data_dir}/${sequence_name}/colmap/sparse/"
+    rm -rf "${original_data_dir}/${sequence_name}/colmap/sparse/0/"
+fi
+python hifi4g_process.py --input ${original_data_dir}/${sequence_name} --output ${processed_data_dir}/${sequence_name} 
 
 cd $current_dir
 echo "HiFi4G Dataset processed successfully"
