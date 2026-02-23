@@ -24,8 +24,8 @@ from plyfile import PlyData
 
 # --- Setup sys.path for LiVoGS imports ---
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.dirname(_THIS_DIR)
-_LIVOGS_COMPRESSION = os.path.join(_PROJECT_ROOT, "LiVoGS", "compression")
+_VIDEOGS_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))
+_LIVOGS_COMPRESSION = os.path.join(_VIDEOGS_ROOT, "LiVoGS", "compression")
 
 if _LIVOGS_COMPRESSION not in sys.path:
     sys.path.insert(0, _LIVOGS_COMPRESSION)
@@ -53,13 +53,15 @@ from color_space_transforms import (
 import raht_cuda
 import rlgr_gpu
 
+DEFAULT_SH_DEGREE = 3
 DEFAULT_QUANTIZE_STEP = {
-        'quats': 0.0001,
-        'scales': 0.0001,
-        'opacity': 0.0001,
-        'sh_dc': 0.0001,
-        'sh_rest': [0.0001] * 45,
-    }
+    'quats': 0.0001,
+    'scales': 0.0001,
+    'opacity': 0.0001,
+    'sh_dc': 0.0001,
+    'sh_rest': [0.0001] * (3 * ((DEFAULT_SH_DEGREE + 1) ** 2 - 1)),
+}
+
 
 # ---------------------------------------------------------------------------
 # PLY I/O (VideoGS-compatible)
@@ -108,6 +110,10 @@ def load_videogs_ply(ply_path, device='cuda'):
         'colors': torch.from_numpy(colors.copy()).float().to(device),
     }
 
+    uncompressed_size_bytes = sum(
+        v.numel() * v.element_size() for v in params.values()
+    )
+
     # Normalize quaternions -> Refer to LiVoGS/compression/data_util.py
     params['quats'] = F.normalize(params['quats'], p=2, dim=1)
     # Logit → [0, 1]
@@ -117,7 +123,7 @@ def load_videogs_ply(ply_path, device='cuda'):
     if params['scales'].min() < 0:
         params['scales'] = torch.exp(params['scales'])
 
-    return params
+    return params, uncompressed_size_bytes
 
 
 def save_videogs_ply(params, output_path, sh_degree=3, eps=1e-6):
@@ -222,8 +228,11 @@ def encode_livogs(
         V0_integer = torch.clamp(torch.floor(V0 / voxel_size).long(), 0, 2**J - 1).int()
 
         morton_result = calc_morton(
-            V0_integer, voxel_grid_depth=J,
-            force_64bit_codes=True, device=device_id, return_torch=True
+            V0_integer,
+            voxel_grid_depth=J,
+            force_64bit_codes=True, 
+            device=device_id,
+            return_torch=True
         )
         morton_codes_points = morton_result['morton_codes']
         if morton_codes_points.dtype == torch.uint64:
@@ -233,8 +242,12 @@ def encode_livogs(
 
     # --- (b) Voxelization ---
     PCvox, PCsorted, voxel_indices, DeltaPC, voxel_info = voxelize_pc(
-        params['means'], vmin=vmin, width=width, J=J,
-        device=device, morton_codes=morton_codes_points
+        params['means'],
+        vmin=vmin,
+        width=width,
+        J=J,
+        device=device,
+        morton_codes=morton_codes_points
     )
     Nvox = voxel_info['Nvox']
     sort_idx = voxel_info['sort_idx']
@@ -248,9 +261,14 @@ def encode_livogs(
 
     merged_means, merged_quats, merged_scales, merged_opacities, merged_colors = \
         merge_gaussian_clusters_with_indices(
-            params['means'], params['quats'], params['scales'],
-            params['opacities'], params['colors'],
-            cluster_indices, cluster_offsets, weight_by_opacity=True
+            params['means'],
+            params['quats'],
+            params['scales'],
+            params['opacities'],
+            params['colors'],
+            cluster_indices,
+            cluster_offsets,
+            weight_by_opacity=True
         )
 
     V = PCvox[:, :3]
@@ -264,8 +282,10 @@ def encode_livogs(
     morton_codes_sorted_uint64 = morton_codes_voxels.to(torch.uint64)
     compress_result = compress_positions_gpu_resident(
         morton_codes=morton_codes_sorted_uint64,
-        octree_depth=J, voxel_grid_depth=J,
-        force_64bit_codes=True, device=device_id
+        octree_depth=J,
+        voxel_grid_depth=J,
+        force_64bit_codes=True,
+        device=device_id
     )
     compressed_positions = compress_result['compressed_data']
     position_compressed_bytes = compress_result['compressed_size_bytes']
@@ -278,9 +298,7 @@ def encode_livogs(
     norm_range_str = "[0, 255]" if apply_color_rescale else "[0, 1]"
 
     target_range = 255.0 if apply_color_rescale else 1.0
-    merged_colors_normalized, sh_norm_info = normalize_attributes(
-        merged_colors, target_range=target_range
-    )
+    merged_colors_normalized, sh_norm_info = normalize_attributes(merged_colors, target_range=target_range)
 
     if sh_color_space == "rgb":
         merged_colors_transformed = merged_colors_normalized
@@ -299,7 +317,7 @@ def encode_livogs(
         merged_quats,
         merged_scales,
         merged_opacities.unsqueeze(1),
-        merged_colors_transformed,
+        merged_colors_transformed
     ], dim=1)
 
     # Convert to specified precision for CUDA RAHT
@@ -309,9 +327,7 @@ def encode_livogs(
     ListC, FlagsC, weightsC, order_RAGFT = raht_cuda.raht_prelude(
         morton_codes_for_raht, J, Nvox
     )
-    Coeff = raht_cuda.raht_transform(
-        attributes_to_compress, ListC, FlagsC, weightsC, inverse=False
-    )
+    Coeff = raht_cuda.raht_transform(attributes_to_compress, ListC, FlagsC, weightsC, inverse=False)
 
     # --- (f) Quantization ---
     n_channels = Coeff.shape[1]
@@ -326,47 +342,42 @@ def encode_livogs(
 
     sh_dc_qstep = quantize_step['sh_dc']
     if isinstance(sh_dc_qstep, (list, tuple)):
-        for i, q in enumerate(sh_dc_qstep):
-            quantize_step_tensor[0, 8 + i] = q
+        for i, qstep in enumerate(sh_dc_qstep):
+            quantize_step_tensor[0, 8 + i] = qstep
     else:
         quantize_step_tensor[0, 8:8 + num_sh_dc] = sh_dc_qstep
 
     sh_rest_qstep = quantize_step['sh_rest']
     if num_sh_rest > 0:
         if isinstance(sh_rest_qstep, (list, tuple)):
-            for i, q in enumerate(sh_rest_qstep):
-                quantize_step_tensor[0, 8 + num_sh_dc + i] = q
+            for i, qstep in enumerate(sh_rest_qstep):
+                quantize_step_tensor[0, 8 + num_sh_dc + i] = qstep
         else:
             quantize_step_tensor[0, 8 + num_sh_dc:] = sh_rest_qstep
     
-    # Compute per-channel min-max normalization statistics
-    channel_min = Coeff.min(dim=0, keepdim=True)[0]  # [1, n_channels]
-    channel_max = Coeff.max(dim=0, keepdim=True)[0]  # [1, n_channels]
-    channel_range = channel_max - channel_min
-    # Avoid division by zero for channels with zero range
-    channel_range = torch.where(channel_range > 1e-10, channel_range, torch.ones_like(channel_range))
 
-    # Normalize coefficients to [0, 1] before quantization
-    Coeff_normalized = (Coeff - channel_min) / channel_range
-    Coeff_enc = torch.floor(Coeff_normalized / quantize_step_tensor + 0.5)
+
+    # Dead-zone quantizer
+    quantize_offset = 0.25 * quantize_step_tensor # dead-zone control
+    abs_Coeff = torch.abs(Coeff)
+    Coeff_enc = torch.sign(Coeff) * torch.floor((abs_Coeff + quantize_offset) / quantize_step_tensor)
 
     # Coefficient reordering for encoding
     coeff_reordered = Coeff_enc.index_select(0, order_RAGFT)
 
     # --- (g) RLGR GPU encoding ---
     coeff_gpu_int32 = coeff_reordered.to(dtype=torch.int32)
-    encoder_gpu = rlgr_gpu.EncoderGPU(block_size=rlgr_block_size, flagSigned=0)
-    compressed_gpu = encoder_gpu.rlgrEncode(coeff_gpu_int32)
+    encoder_gpu = rlgr_gpu.EncoderGPU(block_size=rlgr_block_size, flagSigned=1) # 1 => signed integers (RAHT coefficients can be negative)
+    compressed_attributes = encoder_gpu.rlgrEncode(coeff_gpu_int32)
 
-    attribute_compressed_bytes = compressed_gpu['compressed_data'].shape[0]
+    attribute_compressed_bytes = compressed_attributes['compressed_data'].shape[0]
     total_compressed_bytes = position_compressed_bytes + attribute_compressed_bytes
 
     return {
-        'compressed_gpu': compressed_gpu,
+        'compressed_attributes': compressed_attributes,
         'compressed_positions': compressed_positions,
         'quantize_step_tensor': quantize_step_tensor,
-        'channel_min': channel_min,
-        'channel_range': channel_range,
+        'quantize_offset': quantize_offset,
         'J': J,
         'N_original': N,
         'voxel_info': voxel_info,
@@ -394,7 +405,7 @@ def decode_livogs(compressed_state, device='cuda:0', device_id=0):
 
     Returns reconstructed params dict (all tensors on GPU).
     """
-    compressed_gpu = compressed_state['compressed_gpu']
+    compressed_attributes = compressed_state['compressed_attributes']
     compressed_positions = compressed_state['compressed_positions']
     J = compressed_state['J']
     voxel_info = compressed_state['voxel_info']
@@ -402,23 +413,25 @@ def decode_livogs(compressed_state, device='cuda:0', device_id=0):
     klt_info = compressed_state['klt_info']
     sh_color_space = compressed_state['sh_color_space']
     quantize_step_tensor = compressed_state['quantize_step_tensor']
+    quantize_offset = compressed_state['quantize_offset']
     float_precision_type = compressed_state['float_precision_type']
-    channel_range = compressed_state['channel_range']
-    channel_min = compressed_state['channel_min']
 
     # --- (a) RLGR GPU decoding ---
     decoder_gpu = rlgr_gpu.DecoderGPU()
-    decoded_gpu_tensor, _ = decoder_gpu.rlgrDecode(compressed_gpu)
+    decoded_gpu_tensor, _ = decoder_gpu.rlgrDecode(compressed_attributes)
 
     # --- (b) Dequantization ---
-    Coeff_dec = decoded_gpu_tensor.to(dtype=float_precision_type) * quantize_step_tensor
-    Coeff_dec = Coeff_dec * channel_range + channel_min
+    Coeff_dec = decoded_gpu_tensor.to(dtype=float_precision_type)
+    adjustment = quantize_step_tensor / 2.0 - quantize_offset
+    Coeff_dec = Coeff_dec * quantize_step_tensor + torch.sign(Coeff_dec) * adjustment
 
     # --- (c) Position decoding ---
     decompress_result = decompress_positions_gpu_resident(
         compressed_data=compressed_positions,
-        octree_depth=J, voxel_grid_depth=J,
-        force_64bit_codes=True, device=device_id
+        octree_depth=J,
+        voxel_grid_depth=J,
+        force_64bit_codes=True,
+        device=device_id
     )
     V_decompressed = decompress_result['positions']
     if V_decompressed.dtype == torch.uint32:
@@ -428,8 +441,11 @@ def decode_livogs(compressed_state, device='cuda:0', device_id=0):
     # --- (d) RAHT prelude (decoder-side) ---
     V_dec_int = V_for_decode.int()
     morton_result_dec = calc_morton(
-        V_dec_int, voxel_grid_depth=J,
-        force_64bit_codes=True, device=device_id, return_torch=True
+        V_dec_int,
+        voxel_grid_depth=J,
+        force_64bit_codes=True,
+        device=device_id,
+        return_torch=True
     )
     morton_codes_for_decode = morton_result_dec['morton_codes']
     if morton_codes_for_decode.dtype == torch.uint64:
@@ -444,9 +460,7 @@ def decode_livogs(compressed_state, device='cuda:0', device_id=0):
     order_RAGFT_inv = torch.argsort(order_RAGFT_dec)
     Coeff_to_decompress = Coeff_dec[order_RAGFT_inv, :]
 
-    attributes_reconstructed = raht_cuda.raht_transform(
-        Coeff_to_decompress, ListC_dec, FlagsC_dec, weightsC_dec, inverse=True
-    )
+    attributes_reconstructed = raht_cuda.raht_transform(Coeff_to_decompress, ListC_dec, FlagsC_dec, weightsC_dec, inverse=True)
 
     # --- (f) Reconstruct gaussian splat model ---
     recon_quats_raw = attributes_reconstructed[:, 0:4]
@@ -499,8 +513,8 @@ if __name__ == "__main__":
     parser.add_argument("--interval", type=int, default=1)
     parser.add_argument("--sh_degree", type=int, default=3)
     # LiVoGS-specific parameters
-    parser.add_argument("--J", type=int, default=10,
-                        help="Octree depth for voxelization (default: 10)")
+    parser.add_argument("--J", type=int, default=15,
+                        help="Octree depth for voxelization (default: 15)")
     parser.add_argument("--quantize_step", type=float, default=0.0001,
                         help="Uniform quantization step for all attributes (default: 0.0001)")
     parser.add_argument("--quantize_step_quats", type=float, default=None,
@@ -535,7 +549,7 @@ if __name__ == "__main__":
         'scales': args.quantize_step_scales if args.quantize_step_scales is not None else qs,
         'opacity': args.quantize_step_opacity if args.quantize_step_opacity is not None else qs,
         'sh_dc': args.quantize_step_sh_dc if args.quantize_step_sh_dc is not None else qs,
-        'sh_rest': args.quantize_step_sh_rest if args.quantize_step_sh_rest is not None else qs,
+        'sh_rest': [args.quantize_step_sh_rest if args.quantize_step_sh_rest is not None else qs] * (3 * ((args.sh_degree + 1) ** 2 - 1)),
     }
 
     device = args.device
@@ -575,7 +589,7 @@ if __name__ == "__main__":
     max_iter = searchForMaxIteration(ckpt_path)
     ply_file_path = os.path.join(ckpt_path, f"iteration_{max_iter}", "point_cloud.ply")
 
-    params = load_videogs_ply(ply_file_path, device=device)
+    params, _ = load_videogs_ply(ply_file_path, device=device)
 
     torch.cuda.synchronize(device_id)
     compressed_state = encode_livogs(
@@ -604,7 +618,7 @@ if __name__ == "__main__":
         max_iter = searchForMaxIteration(ckpt_path)
         ply_file_path = os.path.join(ckpt_path, f"iteration_{max_iter}", "point_cloud.ply")
 
-        params = load_videogs_ply(ply_file_path, device=device)
+        params, uncompressed_size_bytes = load_videogs_ply(ply_file_path, device=device)
         N_original = params['means'].shape[0]
 
         # --- 2. Encode (timed) ---
@@ -625,6 +639,8 @@ if __name__ == "__main__":
 
         Nvox = compressed_state['Nvox']
         compressed_size_bytes = compressed_state['total_compressed_bytes']
+        position_compressed_bytes = compressed_state['position_compressed_bytes']
+        attribute_compressed_bytes = compressed_state['attribute_compressed_bytes']
 
         # --- 3. Decode (timed) ---
         t_dec_start = time.perf_counter()
@@ -647,13 +663,18 @@ if __name__ == "__main__":
             "decode_time_ms": decode_time_ms,
             "original_points": N_original,
             "voxelized_points": Nvox,
+            "uncompressed_size_bytes": uncompressed_size_bytes,
             "compressed_size_bytes": compressed_size_bytes,
+            "position_compressed_bytes": position_compressed_bytes,
+            "attribute_compressed_bytes": attribute_compressed_bytes,
         })
 
         tqdm.write(
             f"  Frame {frame}: N={N_original}→{Nvox} voxels, "
             f"enc={encode_time_ms:.2f} ms, dec={decode_time_ms:.2f} ms, "
-            f"size={compressed_size_bytes / 1024 / 1024:.2f} MB"
+            f"uncomp={uncompressed_size_bytes / 1024 / 1024:.2f} MB, "
+            f"comp={compressed_size_bytes / 1024 / 1024:.2f} MB, "
+            f"ratio={uncompressed_size_bytes / compressed_size_bytes:.2f}x"
         )
 
         # Clean up
@@ -666,7 +687,9 @@ if __name__ == "__main__":
         with open(csv_path, "w", newline="") as f:
             w = csv.writer(f)
             w.writerow(["frame_id", "encode_time_ms", "decode_time_ms",
-                         "original_points", "voxelized_points", "compressed_size_bytes"])
+                         "original_points", "voxelized_points", 
+                         "uncompressed_size_bytes", "compressed_size_bytes",
+                         "position_compressed_bytes", "attribute_compressed_bytes"])
             for r in benchmark_rows:
                 w.writerow([
                     r["frame"],
@@ -674,13 +697,19 @@ if __name__ == "__main__":
                     f"{r['decode_time_ms']:.2f}",
                     r["original_points"],
                     r["voxelized_points"],
+                    r["uncompressed_size_bytes"],
                     r["compressed_size_bytes"],
+                    r["position_compressed_bytes"],
+                    r["attribute_compressed_bytes"],
                 ])
 
         n = len(benchmark_rows)
         total_enc_ms = sum(r["encode_time_ms"] for r in benchmark_rows)
         total_dec_ms = sum(r["decode_time_ms"] for r in benchmark_rows)
-        total_size = sum(r["compressed_size_bytes"] for r in benchmark_rows)
+        total_uncomp = sum(r["uncompressed_size_bytes"] for r in benchmark_rows)
+        total_comp = sum(r["compressed_size_bytes"] for r in benchmark_rows)
+        total_position_comp = sum(r["position_compressed_bytes"] for r in benchmark_rows)
+        total_attribute_comp = sum(r["attribute_compressed_bytes"] for r in benchmark_rows)
         total_orig_points = sum(r["original_points"] for r in benchmark_rows)
         total_vox_points = sum(r["voxelized_points"] for r in benchmark_rows)
 
@@ -706,7 +735,11 @@ if __name__ == "__main__":
         print(f"  Frames processed:          {n}")
         print(f"  Total encode time:         {total_enc_ms / 1000:.2f} s  (avg {total_enc_ms / n:.2f} ms/frame)")
         print(f"  Total decode time:         {total_dec_ms / 1000:.2f} s  (avg {total_dec_ms / n:.2f} ms/frame)")
-        print(f"  Total compressed size:     {total_size / 1024 / 1024:.2f} MB  (avg {total_size / n / 1024 / 1024:.2f} MB/frame)")
+        print(f"  Total uncompressed size:   {total_uncomp / 1024 / 1024:.2f} MB  (avg {total_uncomp / n / 1024 / 1024:.2f} MB/frame)")
+        print(f"  Total compressed size:     {total_comp / 1024 / 1024:.2f} MB  (avg {total_comp / n / 1024 / 1024:.2f} MB/frame)")
+        print(f"  Total position compressed size: {total_position_comp / 1024 / 1024:.2f} MB  (avg {total_position_comp / n / 1024 / 1024:.2f} MB/frame)")
+        print(f"  Total attribute compressed size: {total_attribute_comp / 1024 / 1024:.2f} MB  (avg {total_attribute_comp / n / 1024 / 1024:.2f} MB/frame)")
+        print(f"  Compression ratio:         {total_uncomp / total_comp:.2f}x")
         print(f"  Avg point reduction:       {total_orig_points / n:.0f} → {total_vox_points / n:.0f} "
               f"({total_orig_points / total_vox_points:.2f}x)")
         print(f"  CSV: {csv_path}")

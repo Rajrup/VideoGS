@@ -40,8 +40,8 @@ if __name__ == "__main__":
                         help="PNG output folder from compress_to_png_full_sh.py")
     parser.add_argument("--output_folder", type=str, required=True,
                         help="Output folder for MP4 videos")
-    parser.add_argument("--qp", type=int, default=25,
-                        help="H.264 QP value (0=lossless, 51=worst quality). Default: 25")
+    parser.add_argument("--qp", type=int, default=22,
+                        help="H.264 QP value (0=lossless, 51=worst quality). Default: 22")
     parser.add_argument("--sh_degree", type=int, default=3,
                         help="SH degree (used to determine QP capping for sensitive channels)")
     args = parser.parse_args()
@@ -120,8 +120,8 @@ if __name__ == "__main__":
 
         print(f"  Group {group_id}: {group_size} frames, "
               f"time={group_time_ms:.0f} ms, "
-              f"total={group_compressed_size / 1024 / 1024:.2f} MB, "
-              f"avg/frame={avg_per_frame / 1024 / 1024:.2f} MB")
+              f"total compressed size={group_compressed_size / 1024 / 1024:.2f} MB, "
+              f"avg compressed size per frame={avg_per_frame / 1024 / 1024:.2f} MB")
 
     # Copy metadata JSONs
     for json_file in ["min_max.json", "viewer_min_max.json", "group_info.json"]:

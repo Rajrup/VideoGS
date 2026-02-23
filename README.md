@@ -80,6 +80,12 @@ python train_sequence.py --start 0 --end 200 --cuda 0 --data /synology/rajrup/Vi
 python train_sequence.py --start 0 --end 200 --cuda 0 --data /synology/rajrup/VideoGS/HiFi4G_Dataset_processed/4K_Actor2_Dancing --output /synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor2_Dancing --sh 3 --interval 1 --group_size 20 --resolution 2
 
 python train_sequence.py --start 0 --end 200 --cuda 0 --data /synology/rajrup/VideoGS/HiFi4G_Dataset_processed/4K_Actor4_Dancing --output /synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor4_Dancing --sh 3 --interval 1 --group_size 20 --resolution 2
+
+python train_sequence.py --start 0 --end 200 --cuda 0 --data /synology/rajrup/VideoGS/HiFi4G_Dataset_processed/4K_Actor5_Oil-paper_Umbrella --output /synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor5_Oil-paper_Umbrella --sh 3 --interval 1 --group_size 20 --resolution 2
+
+python train_sequence.py --start 0 --end 200 --cuda 0 --data /synology/rajrup/VideoGS/HiFi4G_Dataset_processed/4K_Actor6_Changing_Clothes --output /synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor6_Changing_Clothes --sh 3 --interval 1 --group_size 20 --resolution 2
+
+python train_sequence.py --start 0 --end 200 --cuda 0 --data /synology/rajrup/VideoGS/HiFi4G_Dataset_processed/4K_Actor7_Nunchaku --output /synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor7_Nunchaku --sh 3 --interval 1 --group_size 20 --resolution 2
 ```
 
 ## Compression

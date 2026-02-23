@@ -8,9 +8,6 @@ import argparse
 import sys
 from tqdm import tqdm
 
-# Add project root to path to import modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 def denormalize_uint8(data, min_val, max_val):
     return data / 255.0 * (max_val - min_val) + min_val
 

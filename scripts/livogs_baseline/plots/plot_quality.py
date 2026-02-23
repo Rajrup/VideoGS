@@ -7,24 +7,21 @@ import argparse
 import csv
 import matplotlib.pyplot as plt
 
-DEFAULT_INPUT_FOLDER = "/synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor2_Dancing/livogs_compression"
-DEFAULT_OUTPUT_FOLDER = os.path.dirname(__file__)
-
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input_folder", type=str, default=DEFAULT_INPUT_FOLDER,
-                        help="Base folder for livogs_compression (default: %(default)s)")
+    parser.add_argument("--input_folder", type=str, required=True,
+                        help="Base folder for livogs_compression")
     parser.add_argument("--j", type=int, required=True, help="Octree depth J (e.g. 15)")
     parser.add_argument("--qstep", type=str, required=True, help="Quantization step (e.g. 0.0001)")
     parser.add_argument("--sh_color_space", type=str, required=True, help="Color space (e.g. klt)")
-    parser.add_argument("--output_folder", type=str, default=DEFAULT_OUTPUT_FOLDER,
-                        help="Override: output folder for plot PNG")
+    parser.add_argument("--output_folder", type=str, required=True,
+                        help="Output folder for plot PNG")
     args = parser.parse_args()
 
     config_name = f"J_{args.j}_qstep_{args.qstep}_{args.sh_color_space}"
     config_dir = os.path.join(args.input_folder, config_name)
-    evaluation_csv = os.path.join(config_dir, "evaluation_renders", "evaluation_results.csv")
+    evaluation_csv = os.path.join(config_dir, "evaluation", "evaluation_results.csv")
     out_dir = os.path.join(args.output_folder, "plots", "livogs_compression", config_name)
     out_path = os.path.join(out_dir, "quality.png")
     os.makedirs(out_dir, exist_ok=True)
@@ -46,7 +43,7 @@ def main():
 
     n = len(frames)
     x = range(n)
-    tick_every = max(1, n // 40)
+    tick_every = 10
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
 

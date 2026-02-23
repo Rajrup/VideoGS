@@ -8,8 +8,6 @@ import argparse
 import csv
 import matplotlib.pyplot as plt
 
-DEFAULT_INPUT_FOLDER = "/synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor2_Dancing/videogs_compression"
-DEFAULT_OUTPUT_FOLDER = os.path.dirname(__file__)
 
 def load_png_compress_csv(path):
     rows = []
@@ -41,11 +39,11 @@ def load_png_decompress_csv(path):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input_folder", type=str, default=DEFAULT_INPUT_FOLDER,
-                        help="Base folder for videogs_compression (default: %(default)s)")
+    parser.add_argument("--input_folder", type=str, required=True,
+                        help="Base folder for videogs_compression")
     parser.add_argument("--qp", type=int, required=True, help="QP value (e.g. 22)")
-    parser.add_argument("--output_folder", type=str, default=DEFAULT_OUTPUT_FOLDER,
-                        help="Override: output folder for PNG")
+    parser.add_argument("--output_folder", type=str, required=True,
+                        help="Output folder for plot PNG")
     args = parser.parse_args()
 
     qp_dir = os.path.join(args.input_folder, f"qp_{args.qp}")
@@ -124,7 +122,7 @@ def main():
     )
     ax.set_xlabel("Frame")
     ax.set_ylabel("Time (ms)")
-    tick_every = 5
+    tick_every = 10
     ax.set_xticks(x[::tick_every])
     ax.set_xticklabels(frame_ids[::tick_every], rotation=90)
     ax.legend(loc="upper right")

@@ -1,3 +1,13 @@
+#!/usr/bin/env python3
+"""
+Evaluate LiVoGS decompression quality against GT VideoGS-trained models.
+
+For each frame, loads the GT PLY and the LiVoGS-decompressed PLY, renders
+test cameras using the VideoGS gaussian renderer, and computes PSNR / SSIM.
+
+Output: per-frame CSV, summary JSON, and optionally saved rendered images.
+"""
+
 import os
 import csv
 import numpy as np
@@ -11,6 +21,7 @@ from tqdm import tqdm
 from pathlib import Path
 from PIL import Image
 from concurrent.futures import ThreadPoolExecutor
+
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -163,16 +174,18 @@ def save_gt_images(cameras, save_dir, frame):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Evaluate LiVoGS decompression quality against GT models"
+    )
     parser.add_argument("--gt_ply_path", type=str, required=True,
-                        help="Path to training checkpoint dir (e.g. .../checkpoint), containing frame folders")
+                        help="Path to training checkpoint dir (e.g. .../checkpoint)")
     parser.add_argument("--decompressed_ply_path", type=str, required=True,
                         help="Folder containing decompressed PLY files (<frame_id>/point_cloud/point_cloud.ply)")
     parser.add_argument("--dataset_path", type=str, required=True,
-                        help="Path to processed dataset (containing 0, 1, ... frame folders with transforms.json)")
+                        help="Path to processed dataset (containing frame folders with transforms.json)")
     parser.add_argument("--sh_degree", type=int, default=3)
     parser.add_argument("--resolution", type=int, default=2,
-                        help="Resolution scale used during training (1, 2, 4, 8). Must match training -r flag.")
+                        help="Resolution scale used during training (1, 2, 4, 8)")
     parser.add_argument("--llffhold", type=int, default=8,
                         help="Every llffhold-th camera is used for test evaluation (default: 8)")
     parser.add_argument("--white_background", action="store_true", default=True,
@@ -281,21 +294,25 @@ if __name__ == "__main__":
 
         del gt_renders, decomp_renders
         torch.cuda.empty_cache()
-        
+
     # --- Summary ---
     if results:
-        print("\n" + "=" * 60)
+        print("\n" + "=" * 70)
         print(f"Evaluation Summary (llffhold={args.llffhold}, {len(cameras)} test cameras)")
-        print("=" * 60)
-        print(f"  GT Model       -> PSNR: {np.mean(gt_metrics_all['psnr']):.4f}, SSIM: {np.mean(gt_metrics_all['ssim']):.4f}")
-        print(f"  Decomp Model   -> PSNR: {np.mean(decomp_metrics_all['psnr']):.4f}, SSIM: {np.mean(decomp_metrics_all['ssim']):.4f}")
-        print(f"  Quality Drop   -> PSNR: {np.mean(gt_metrics_all['psnr']) - np.mean(decomp_metrics_all['psnr']):.4f}, "
+        print("=" * 70)
+        print(f"  GT Model       -> PSNR: {np.mean(gt_metrics_all['psnr']):.4f}, "
+              f"SSIM: {np.mean(gt_metrics_all['ssim']):.4f}")
+        print(f"  Decomp Model   -> PSNR: {np.mean(decomp_metrics_all['psnr']):.4f}, "
+              f"SSIM: {np.mean(decomp_metrics_all['ssim']):.4f}")
+        print(f"  Quality Drop   -> PSNR: "
+              f"{np.mean(gt_metrics_all['psnr']) - np.mean(decomp_metrics_all['psnr']):.4f}, "
               f"SSIM: {np.mean(gt_metrics_all['ssim']) - np.mean(decomp_metrics_all['ssim']):.6f}")
-        print("=" * 60)
+        print("=" * 70)
 
         # Save results JSON
         if args.output_render_path:
             os.makedirs(args.output_render_path, exist_ok=True)
+
             with open(os.path.join(args.output_render_path, "evaluation_results.json"), "w") as f:
                 json.dump({
                     "config": {

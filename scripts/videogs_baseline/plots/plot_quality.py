@@ -1,25 +1,22 @@
 """
 Plot GT vs decompressed model quality per frame (PSNR and SSIM).
-Requires: evaluation_results.csv under input_folder/qp_<qp>/evaluation_renders/
+Requires: evaluation_results.csv under input_folder/qp_<qp>/evaluation/
 """
 import os
 import argparse
 import csv
 import matplotlib.pyplot as plt
 
-DEFAULT_INPUT_FOLDER = "/synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor2_Dancing/videogs_compression"
-DEFAULT_OUTPUT_FOLDER = os.path.dirname(__file__)
-
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input_folder", type=str, default=DEFAULT_INPUT_FOLDER,
-                        help="Base folder for videogs_compression (default: %(default)s)")
+    parser.add_argument("--input_folder", type=str, required=True,
+                        help="Base folder for videogs_compression")
     parser.add_argument("--qp", type=int, required=True, help="QP value (e.g. 22)")
-    parser.add_argument("--output_folder", type=str, default=DEFAULT_OUTPUT_FOLDER, help="Override: output PNG path")
+    parser.add_argument("--output_folder", type=str, required=True, help="Output folder for plot PNG")
     args = parser.parse_args()
 
     qp_dir = os.path.join(args.input_folder, f"qp_{args.qp}")
-    evaluation_csv = os.path.join(qp_dir, "evaluation_renders", "evaluation_results.csv")
+    evaluation_csv = os.path.join(qp_dir, "evaluation", "evaluation_results.csv")
     out_dir = os.path.join(args.output_folder, "plots", "videogs_compression", f"qp_{args.qp}")
     out_path = os.path.join(out_dir, "quality.png")
     os.makedirs(out_dir, exist_ok=True)
@@ -43,7 +40,7 @@ def main():
 
     n = len(frames)
     x = range(n)
-    tick_every = max(1, n // 40)
+    tick_every = 10
 
     # --- PSNR ---
     ax1.plot(x, gt_psnr, "o-", label="GT model", color="green", markersize=4)

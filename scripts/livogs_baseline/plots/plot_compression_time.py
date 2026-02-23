@@ -7,9 +7,6 @@ import argparse
 import csv
 import matplotlib.pyplot as plt
 
-DEFAULT_INPUT_FOLDER = "/synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor2_Dancing/livogs_compression"
-DEFAULT_OUTPUT_FOLDER = os.path.dirname(__file__)
-
 
 def load_benchmark_csv(path):
     rows = []
@@ -26,13 +23,13 @@ def load_benchmark_csv(path):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input_folder", type=str, default=DEFAULT_INPUT_FOLDER,
-                        help="Base folder for livogs_compression (default: %(default)s)")
+    parser.add_argument("--input_folder", type=str, required=True,
+                        help="Base folder for livogs_compression")
     parser.add_argument("--j", type=int, required=True, help="Octree depth J (e.g. 15)")
     parser.add_argument("--qstep", type=str, required=True, help="Quantization step (e.g. 0.0001)")
     parser.add_argument("--sh_color_space", type=str, required=True, help="Color space (e.g. klt)")
-    parser.add_argument("--output_folder", type=str, default=DEFAULT_OUTPUT_FOLDER,
-                        help="Override: output folder for plot PNG")
+    parser.add_argument("--output_folder", type=str, required=True,
+                        help="Output folder for plot PNG")
     args = parser.parse_args()
 
     config_name = f"J_{args.j}_qstep_{args.qstep}_{args.sh_color_space}"
@@ -52,7 +49,7 @@ def main():
     decode_ms = [r["decode_time_ms"] for r in rows]
 
     x = list(range(n))
-    tick_every = max(1, n // 40)
+    tick_every = 10
 
     fig, ax = plt.subplots(figsize=(12, 5))
     ax.stackplot(

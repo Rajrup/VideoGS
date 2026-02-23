@@ -26,12 +26,16 @@ def normalize_uint16(data):
 
 def get_ply_matrix(file_path):
     plydata = PlyData.read(file_path)
-    num_vertices = len(plydata['vertex'])
-    num_attributes = len(plydata['vertex'].properties)
-    data_matrix = np.zeros((num_vertices, num_attributes), dtype=float)
-    for i, name in enumerate(plydata['vertex'].data.dtype.names):
-        data_matrix[:, i] = plydata['vertex'].data[name]
-    return data_matrix
+    vertex = plydata['vertex']
+    float_names = [p.name for p in vertex.properties if p.name != 'vertex_id']
+    num_vertices = len(vertex)
+    data_matrix = np.zeros((num_vertices, len(float_names)), dtype=np.float32)
+    for i, name in enumerate(float_names):
+        data_matrix[:, i] = vertex[name]
+    # Exclude normals (nx, ny, nz) from uncompressed size
+    n_float = len(float_names) - 3
+    uncompressed_size_bytes = num_vertices * n_float * np.dtype(np.float32).itemsize
+    return data_matrix, uncompressed_size_bytes
 
 def calculate_image_size(num_points):
     image_size = 8
@@ -140,15 +144,15 @@ if __name__ == "__main__":
             ply_file_path = os.path.join(ckpt_path, f"iteration_{max_iter}", "point_cloud.ply")
             
             # Read PLY (not timed)
-            current_data = get_ply_matrix(ply_file_path)
-            num_points = current_data.shape[0]
+            current_data, uncompressed_size_bytes = get_ply_matrix(ply_file_path)
+            original_points = current_data.shape[0]
 
             # Time only quantize + encode to PNG
             t0 = time.perf_counter()
-            image_size = calculate_image_size(num_points=num_points)
-            min_max_json[f'{frame}_num'] = num_points
+            image_size = calculate_image_size(num_points=original_points)
+            min_max_json[f'{frame}_num'] = original_points
             viewer_min_max_json[frame] = {}
-            viewer_min_max_json[frame]['num'] = num_points
+            viewer_min_max_json[frame]['num'] = original_points
             viewer_min_max_json[frame]['info'] = []
             images, frame_min_max = quantize_videogs_image(current_data, image_size)
             encode_videogs_png(images, output_path, frame)
@@ -161,12 +165,20 @@ if __name__ == "__main__":
                 if fname.startswith(f"{frame}_") and fname.endswith(".png"):
                     frame_size += os.path.getsize(os.path.join(output_path, fname))
 
-            benchmark_rows.append({"frame": frame, "time_ms": time_ms, "compressed_size_bytes": frame_size, "num_points": num_points})
+            benchmark_rows.append({"frame": frame, "time_ms": time_ms, "uncompressed_size_bytes": uncompressed_size_bytes, "compressed_size_bytes": frame_size, "original_points": original_points})
 
             # Update global min_max with frame info
             for k, v in frame_min_max.items():
                 min_max_json[f'{frame}_{k}'] = v
                 viewer_min_max_json[frame]['info'].append(v)
+
+            tqdm.write(
+                f"  Frame {frame}: N={original_points}, "
+                f"enc={time_ms:.2f} ms, "
+                f"uncomp={uncompressed_size_bytes / 1024 / 1024:.2f} MB, "
+                f"comp={frame_size / 1024 / 1024:.2f} MB, "
+                f"ratio={uncompressed_size_bytes / frame_size:.2f}x"
+            )
 
     # Save Metadata
     with open(os.path.join(args.output_folder, "min_max.json"), "w") as f:
@@ -183,11 +195,12 @@ if __name__ == "__main__":
         csv_path = os.path.join(args.output_folder, "benchmark_compress_to_png.csv")
         with open(csv_path, "w", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["frame_id", "time_ms", "compressed_size_bytes", "num_points"])
+            w.writerow(["frame_id", "time_ms", "uncompressed_size_bytes", "compressed_size_bytes", "original_points"])
             for r in benchmark_rows:
-                w.writerow([r["frame"], f"{r['time_ms']:.2f}", r["compressed_size_bytes"], r["num_points"]])
+                w.writerow([r["frame"], f"{r['time_ms']:.2f}", r["uncompressed_size_bytes"], r["compressed_size_bytes"], r["original_points"]])
         total_time_ms = sum(r["time_ms"] for r in benchmark_rows)
-        total_size = sum(r["compressed_size_bytes"] for r in benchmark_rows)
+        total_uncompressed_size = sum(r["uncompressed_size_bytes"] for r in benchmark_rows)
+        total_compressed_size = sum(r["compressed_size_bytes"] for r in benchmark_rows)
         n = len(benchmark_rows)
         print("\n" + "=" * 60)
         print("Benchmark Summary (compress to PNG)")
@@ -195,8 +208,10 @@ if __name__ == "__main__":
         print(f"  Frames processed:       {n}")
         print(f"  Total time (excl PLY):  {total_time_ms / 1000:.2f} s")
         print(f"  Avg time per frame:     {total_time_ms / n:.2f} ms")
-        print(f"  Total PNG size:         {total_size / 1024 / 1024:.2f} MB")
-        print(f"  Avg size per frame:     {total_size / n / 1024 / 1024:.2f} MB")
+        print(f"  Total uncompressed:     {total_uncompressed_size / 1024 / 1024:.2f} MB")
+        print(f"  Avg uncompressed per frame: {total_uncompressed_size / n / 1024 / 1024:.2f} MB")
+        print(f"  Total PNG size:         {total_compressed_size / 1024 / 1024:.2f} MB")
+        print(f"  Avg size per frame:     {total_compressed_size / n / 1024 / 1024:.2f} MB")
         print(f"  CSV: {csv_path}")
         print("=" * 60)
         

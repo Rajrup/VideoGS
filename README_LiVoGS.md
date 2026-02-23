@@ -8,7 +8,7 @@ Setup and running instructions for LiVoGS on VideoGS trained models.
 conda activate videogs
 
 # Clone LiVoGS (no submodules)
-git clone https://github.com/Rajrup/LiVoGS.git
+git submodule add https://github.com/haodongw101/LiVoGS.git
 cd LiVoGS
 
 # Selectively clone only the PyRLGR pybind11 submodule

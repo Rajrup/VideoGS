@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Evaluate LiVoGS decompression quality against GT VideoGS-trained models.
+Evaluate decompression quality against GT VideoGS-trained models.
 
-For each frame, loads the GT PLY and the LiVoGS-decompressed PLY, renders
-test cameras using the VideoGS gaussian renderer, and computes PSNR / SSIM.
+For each frame, loads the GT PLY and the VideoGS-decompressed PLY, renders
+test cameras using the gaussian renderer, and computes PSNR / SSIM.
 
 Output: per-frame CSV, summary JSON, and optionally saved rendered images.
 """
@@ -37,7 +37,8 @@ from scene.colmap_loader import rotmat2qvec, qvec2rotmat
 
 
 def load_test_cameras(dataset_path, first_frame, resolution, llffhold=8):
-    """Load only test cameras (every llffhold-th) from the first frame's transforms.json."""
+    """Load only test cameras (every llffhold-th) from the first frame's transforms.json.
+    Parses transforms.json directly -- no DynamicScene overhead, no loading of train cameras."""
 
     frame_path = os.path.join(dataset_path, str(first_frame))
     with open(os.path.join(frame_path, "transforms.json")) as f:
@@ -66,20 +67,24 @@ def load_test_cameras(dataset_path, first_frame, resolution, llffhold=8):
         cam_name = entry["file_path"]
         cam_file_paths.append(cam_name)
 
+        # Extrinsics (same logic as readCamerasFromTransforms in dataset_readers.py)
         matrix = np.linalg.inv(np.matmul(np.array(entry["transform_matrix"]), flip_mat))
         R = np.transpose(qvec2rotmat(-rotmat2qvec(matrix[:3, :3])))
         T = matrix[:3, 3]
 
+        # Load image for this frame
         image_path = os.path.join(frame_path, cam_name)
         image_pil = Image.open(image_path).convert("RGB")
 
         orig_w, orig_h = image_pil.size
 
+        # Intrinsics
         fx = entry["fl_x"]
         fy = entry["fl_y"]
         FovY = focal2fov(fy, orig_h)
         FovX = focal2fov(fx, orig_w)
 
+        # Resolution (same logic as loadCam in camera_utils.py, resolution_scale=1.0)
         if resolution in [1, 2, 4, 8]:
             target_res = (round(orig_w / resolution), round(orig_h / resolution))
         else:
@@ -111,7 +116,7 @@ def _load_single_image(args):
 
 
 def update_camera_images(cameras, dataset_path, frame, cam_file_paths, cam_resolutions):
-    """Swap GT images in existing Camera objects for a new frame."""
+    """Swap GT images in existing Camera objects for a new frame. Loads test images in parallel."""
     frame_path = os.path.join(dataset_path, str(frame))
     load_args = [
         (os.path.join(frame_path, cam_file_paths[idx]), cam_resolutions[idx])
@@ -150,57 +155,23 @@ def render_and_evaluate(gaussians, cameras, background, pipeline, psnr_metric, s
     return avg_metrics, rendered_images
 
 
-def save_images(rendered_images, save_dir, frame, prefix):
-    """Save rendered images to disk."""
+def save_images(images, save_dir, frame, prefix):
+    """Save a list of [C,H,W] tensors (CPU or CUDA) to disk as PNGs."""
     os.makedirs(save_dir, exist_ok=True)
-    for idx, rendered in enumerate(rendered_images):
-        render_np = (rendered.permute(1, 2, 0).numpy() * 255).clip(0, 255).astype(np.uint8)
-        render_bgr = cv2.cvtColor(render_np, cv2.COLOR_RGB2BGR)
-        cv2.imwrite(os.path.join(save_dir, f"frame{frame}_view{idx}_{prefix}.png"), render_bgr)
+    for idx, img in enumerate(images):
+        img_np = (img.cpu().permute(1, 2, 0).numpy() * 255).clip(0, 255).astype(np.uint8)
+        img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+        cv2.imwrite(os.path.join(save_dir, f"frame{frame}_view{idx}_{prefix}.png"), img_bgr)
 
 
-def save_gt_images(cameras, save_dir, frame):
-    """Save GT camera images to disk."""
-    os.makedirs(save_dir, exist_ok=True)
-    for idx, cam in enumerate(cameras):
-        gt_np = (cam.original_image.cpu().permute(1, 2, 0).numpy() * 255).clip(0, 255).astype(np.uint8)
-        gt_bgr = cv2.cvtColor(gt_np, cv2.COLOR_RGB2BGR)
-        cv2.imwrite(os.path.join(save_dir, f"frame{frame}_view{idx}_gt_image.png"), gt_bgr)
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Evaluate LiVoGS decompression quality against GT models"
-    )
-    parser.add_argument("--gt_ply_path", type=str, required=True,
-                        help="Path to training checkpoint dir (e.g. .../checkpoint)")
-    parser.add_argument("--decompressed_ply_path", type=str, required=True,
-                        help="Folder containing decompressed PLY files (<frame_id>/point_cloud/point_cloud.ply)")
-    parser.add_argument("--dataset_path", type=str, required=True,
-                        help="Path to processed dataset (containing frame folders with transforms.json)")
-    parser.add_argument("--sh_degree", type=int, default=3)
-    parser.add_argument("--resolution", type=int, default=2,
-                        help="Resolution scale used during training (1, 2, 4, 8)")
-    parser.add_argument("--llffhold", type=int, default=8,
-                        help="Every llffhold-th camera is used for test evaluation")
-    parser.add_argument("--white_background", action="store_true", default=True)
-    parser.add_argument("--no_white_background", action="store_true")
-    parser.add_argument("--save_renders", action="store_true",
-                        help="Save GT images, GT model renders, and decompressed model renders")
-    parser.add_argument("--output_render_path", type=str, default=None,
-                        help="Folder to save rendered images and evaluation results")
-    parser.add_argument("--frame_start", type=int, default=0)
-    parser.add_argument("--frame_end", type=int, default=200)
-    parser.add_argument("--interval", type=int, default=1)
-    args = parser.parse_args()
-
-    if args.no_white_background:
-        args.white_background = False
+def evaluate_decompression_quality(args):
+    """Evaluate decompression quality frame-by-frame."""
 
     if args.save_renders and not args.output_render_path:
         print("Error: --output_render_path is required when --save_renders is set")
         sys.exit(1)
 
+    # --- Setup ---
     pipeline = PipelineParams(argparse.ArgumentParser())
 
     bg_color = [1, 1, 1] if args.white_background else [0, 0, 0]
@@ -213,13 +184,25 @@ if __name__ == "__main__":
     decomp_metrics_all = {'psnr': [], 'ssim': []}
     results = []
 
-    # Load test cameras once from the first frame
+    # --- Load test cameras ONCE from the first frame ---
     print("Loading test cameras from first frame...")
     cameras, cam_file_paths, cam_resolutions = load_test_cameras(
         args.dataset_path, args.frame_start, args.resolution, args.llffhold
     )
 
-    for frame in tqdm(range(args.frame_start, args.frame_end, args.interval), desc="Evaluating Frames"):
+    n_test_cams = len(cameras)
+    frame_start = args.frame_start
+    frame_end = args.frame_end
+    interval = args.interval
+
+    print(f"\nEvaluating decompression quality")
+    print(f"  GT PLY path:           {args.gt_ply_path}")
+    print(f"  Decompressed PLY path: {args.decompressed_ply_path}")
+    print(f"  Frames: [{frame_start}, {frame_end}) interval {interval}")
+    print(f"  Test cameras: {n_test_cams}\n")
+
+    # --- Per-frame evaluation loop ---
+    for frame in tqdm(range(frame_start, frame_end, interval), desc="Evaluating Frames"):
 
         # GT PLY
         ckpt_path = os.path.join(args.gt_ply_path, str(frame), "point_cloud")
@@ -230,9 +213,7 @@ if __name__ == "__main__":
         gt_ply_file = os.path.join(ckpt_path, f"iteration_{max_iter}", "point_cloud.ply")
 
         # Decompressed PLY
-        decomp_ply_file = os.path.join(
-            args.decompressed_ply_path, str(frame), "point_cloud", "point_cloud.ply"
-        )
+        decomp_ply_file = os.path.join(args.decompressed_ply_path, str(frame), "point_cloud", "point_cloud.ply")
         if not os.path.exists(decomp_ply_file):
             print(f"Warning: Decompressed PLY not found: {decomp_ply_file}, skipping frame {frame}")
             continue
@@ -289,7 +270,9 @@ if __name__ == "__main__":
               f"Decomp SSIM={decomp_metrics['ssim']:.4f}")
 
         if args.save_renders:
-            save_gt_images(cameras, os.path.join(args.output_render_path, "gt_images"), frame)
+            gt_images = [cam.original_image for cam in cameras]
+            save_images(gt_images, os.path.join(args.output_render_path, "gt_images"),
+                        frame, "gt_image")
             save_images(gt_renders, os.path.join(args.output_render_path, "gt_model_renders"),
                         frame, "gt_render")
             save_images(decomp_renders, os.path.join(args.output_render_path, "decomp_model_renders"),
@@ -301,7 +284,7 @@ if __name__ == "__main__":
     # --- Summary ---
     if results:
         print("\n" + "=" * 70)
-        print(f"Evaluation Summary (llffhold={args.llffhold}, {len(cameras)} test cameras)")
+        print(f"Evaluation Summary ({len(results)} frames, {n_test_cams} test cameras)")
         print("=" * 70)
         print(f"  GT Model       -> PSNR: {np.mean(gt_metrics_all['psnr']):.4f}, "
               f"SSIM: {np.mean(gt_metrics_all['ssim']):.4f}")
@@ -318,9 +301,14 @@ if __name__ == "__main__":
             with open(os.path.join(args.output_render_path, "evaluation_results.json"), "w") as f:
                 json.dump({
                     "config": {
+                        "gt_ply_path": args.gt_ply_path,
+                        "decompressed_ply_path": args.decompressed_ply_path,
                         "llffhold": args.llffhold,
-                        "num_test_cameras": len(cameras),
+                        "num_test_cameras": n_test_cams,
                         "resolution": args.resolution,
+                        "frame_start": frame_start,
+                        "frame_end": frame_end,
+                        "interval": interval,
                     },
                     "summary": {
                         "gt_psnr": np.mean(gt_metrics_all['psnr']),
@@ -360,3 +348,39 @@ if __name__ == "__main__":
             print(f"  CSV saved to: {csv_path}")
     else:
         print("No frames were evaluated.")
+
+    return results
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Evaluate decompression quality against GT models"
+    )
+    parser.add_argument("--gt_ply_path", type=str, required=True,
+                        help="Path to training checkpoint dir (e.g. .../checkpoint)")
+    parser.add_argument("--decompressed_ply_path", type=str, required=True,
+                        help="Folder containing decompressed PLY files (<frame_id>/point_cloud/point_cloud.ply)")
+    parser.add_argument("--dataset_path", type=str, required=True,
+                        help="Path to processed dataset (containing frame folders with transforms.json)")
+    parser.add_argument("--sh_degree", type=int, default=3)
+    parser.add_argument("--resolution", type=int, default=2,
+                        help="Resolution scale used during training (1, 2, 4, 8)")
+    parser.add_argument("--llffhold", type=int, default=8,
+                        help="Every llffhold-th camera is used for test evaluation (default: 8)")
+    parser.add_argument("--white_background", action="store_true", default=True,
+                        help="Use white background (default True for HiFi4G)")
+    parser.add_argument("--no_white_background", action="store_true",
+                        help="Use black background instead")
+    parser.add_argument("--save_renders", action="store_true",
+                        help="Save GT images, GT model renders, and decompressed model renders")
+    parser.add_argument("--output_render_path", type=str, default=None,
+                        help="Folder to save rendered images (required if --save_renders)")
+    parser.add_argument("--frame_start", type=int, default=0)
+    parser.add_argument("--frame_end", type=int, default=200)
+    parser.add_argument("--interval", type=int, default=1)
+    args = parser.parse_args()
+
+    if args.no_white_background:
+        args.white_background = False
+
+    evaluate_decompression_quality(args)
