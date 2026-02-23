@@ -9,4 +9,4 @@
 	url = https://github.com/Amartya1911/VideoGS_IOS_Viewer.git
 [submodule "LiVoGS"]
 	path = LiVoGS
-	url = https://github.com/haodongw101/LiVoGS.git
+	url = git@github.com:haodongw101/LiVoGS.git
