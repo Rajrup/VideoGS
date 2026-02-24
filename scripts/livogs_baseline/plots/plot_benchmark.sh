@@ -14,10 +14,10 @@ input_folder="${data_path}/train_output/${DATASET_NAME}/${SEQUENCE_NAME}/compres
 plot_script_folder="${working_dir}/scripts/livogs_baseline/plots"
 
 # Plot compressed size breakdown + point counts
-python ${plot_script_folder}/plot_compressed_size.py --input_folder ${input_folder} --j ${J} --qstep ${QUANTIZE_STEP} --sh_color_space ${SH_COLOR_SPACE} --output_folder ${plot_script_folder}
+python ${plot_script_folder}/plot_compressed_size.py --input_folder ${input_folder} --dataset_name ${DATASET_NAME} --sequence_name ${SEQUENCE_NAME} --j ${J} --qstep ${QUANTIZE_STEP} --sh_color_space ${SH_COLOR_SPACE} --output_folder ${plot_script_folder}
 
 # Plot encode/decode time (stacked area)
-python ${plot_script_folder}/plot_compression_time.py --input_folder ${input_folder} --j ${J} --qstep ${QUANTIZE_STEP} --sh_color_space ${SH_COLOR_SPACE} --output_folder ${plot_script_folder}
+python ${plot_script_folder}/plot_compression_time.py --input_folder ${input_folder} --dataset_name ${DATASET_NAME} --sequence_name ${SEQUENCE_NAME} --j ${J} --qstep ${QUANTIZE_STEP} --sh_color_space ${SH_COLOR_SPACE} --output_folder ${plot_script_folder}
 
 # Plot quality (PSNR / SSIM)
-python ${plot_script_folder}/plot_quality.py --input_folder ${input_folder} --j ${J} --qstep ${QUANTIZE_STEP} --sh_color_space ${SH_COLOR_SPACE} --output_folder ${plot_script_folder}
+python ${plot_script_folder}/plot_quality.py --input_folder ${input_folder} --dataset_name ${DATASET_NAME} --sequence_name ${SEQUENCE_NAME} --j ${J} --qstep ${QUANTIZE_STEP} --sh_color_space ${SH_COLOR_SPACE} --output_folder ${plot_script_folder}
