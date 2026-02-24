@@ -1,6 +1,17 @@
 #!/bin/bash
 
 # Evaluate LiVoGS compression pipeline for VideoGS-trained models
+#
+# Usage: evaluate_livogs_compression.sh [OPTIONS]
+#   --dataset_name     Dataset name           (default: HiFi4G_Dataset)
+#   --sequence_name    Sequence name          (default: 4K_Actor1_Greeting)
+#   --quantize_step    Quantization step      (default: 0.0001)
+#   --j                Octree depth           (default: 15)
+#   --sh_color_space   Color space            (default: klt)
+#   --frame_start      Start frame            (default: 0)
+#   --frame_end        End frame              (default: 200)
+#   --interval         Frame interval         (default: 1)
+
 DATASET_NAME="HiFi4G_Dataset"
 SEQUENCE_NAME="4K_Actor1_Greeting"
 RESOLUTION=2
@@ -15,6 +26,21 @@ J=15                    # Octree depth for voxelization
 QUANTIZE_STEP=0.0001      # Uniform quantization step
 SH_COLOR_SPACE="klt"    # Color space: rgb, yuv, klt
 RLGR_BLOCK_SIZE=4096    # RLGR parallel block size
+
+# --- Parse named arguments ---
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dataset_name)   DATASET_NAME="$2";   shift 2 ;;
+        --sequence_name)  SEQUENCE_NAME="$2";  shift 2 ;;
+        --quantize_step)  QUANTIZE_STEP="$2";  shift 2 ;;
+        --j)              J="$2";              shift 2 ;;
+        --sh_color_space) SH_COLOR_SPACE="$2"; shift 2 ;;
+        --frame_start)    START_FRAME="$2";    shift 2 ;;
+        --frame_end)      END_FRAME="$2";      shift 2 ;;
+        --interval)       INTERVAL="$2";       shift 2 ;;
+        *) echo "Unknown argument: $1"; exit 1 ;;
+    esac
+done
 
 data_path="/synology/rajrup/VideoGS"
 dataset_path="${data_path}/${DATASET_NAME}_processed/${SEQUENCE_NAME}"

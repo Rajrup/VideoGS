@@ -34,10 +34,6 @@ _RAHT_PY_ROOT = os.path.join(_LIVOGS_COMPRESSION, "RAHT-3DGS-codec", "python")
 if _RAHT_PY_ROOT not in sys.path:
     sys.path.append(_RAHT_PY_ROOT)
 
-_OCTREE_ROOT = os.path.join(_LIVOGS_COMPRESSION, "Octree_Compression_GPU")
-sys.path.insert(0, os.path.join(_OCTREE_ROOT, 'python'))
-sys.path.insert(0, os.path.join(_OCTREE_ROOT, 'build'))
-
 from gpu_octree_codec import calc_morton, compress_positions_gpu_resident, decompress_positions_gpu_resident
 from merge_cluster_cuda import merge_gaussian_clusters_with_indices
 from voxelize_pc import voxelize_pc
@@ -46,9 +42,8 @@ from color_space_transforms import (
     denormalize_attributes,
     rgb_to_yuv,
     yuv_to_rgb,
-    compute_klt_matrices_per_degree,
-    rgb_to_klt,
-    klt_to_rgb,
+    rgb_to_klt15,
+    klt15_to_rgb,
 )
 import raht_cuda
 import rlgr_gpu
@@ -307,9 +302,8 @@ def encode_livogs(
         merged_colors_transformed = rgb_to_yuv(merged_colors_normalized)
         print(f"  SH color space: YUV (min/max normalize to {norm_range_str} + RGB->YUV)")
     elif sh_color_space == "klt":
-        klt_info = compute_klt_matrices_per_degree(merged_colors_normalized)
-        merged_colors_transformed = rgb_to_klt(merged_colors_normalized, klt_info)
-        print(f"  SH color space: KLT (min/max normalize to {norm_range_str} + per-degree PCA)")
+        merged_colors_transformed, klt_info = rgb_to_klt15(merged_colors_normalized)
+        print(f"  SH color space: KLT15 (min/max normalize to {norm_range_str} + BT.709 YUV + per-channel KLT on higher-degree SH)")
     else:
         raise ValueError(f"Invalid sh_color_space: {sh_color_space}")
 
@@ -474,7 +468,7 @@ def decode_livogs(compressed_state, device='cuda:0', device_id=0):
     if sh_color_space == "yuv":
         recon_colors_sh_raw = yuv_to_rgb(recon_colors_sh_raw)
     elif sh_color_space == "klt":
-        recon_colors_sh_raw = klt_to_rgb(recon_colors_sh_raw, klt_info)
+        recon_colors_sh_raw = klt15_to_rgb(recon_colors_sh_raw, klt_info)
     recon_colors_sh_raw = denormalize_attributes(recon_colors_sh_raw, sh_norm_info)
 
     # World-space positions from voxel coordinates
@@ -536,21 +530,30 @@ if __name__ == "__main__":
                         help="Disable SH color rescaling")
     parser.add_argument("--rlgr_block_size", type=int, default=4096,
                         help="RLGR parallel block size (default: 4096)")
+    parser.add_argument("--quantize_config_json", type=str, default=None,
+                        help="Path to JSON file with full quantize_config dict (overrides all --quantize_step_* args)")
     parser.add_argument("--device", type=str, default="cuda:0")
     args = parser.parse_args()
 
     if args.no_color_rescale:
         args.color_rescale = False
 
-    # Build quantize_step dict
-    qs = args.quantize_step
-    quantize_step = {
-        'quats': args.quantize_step_quats if args.quantize_step_quats is not None else qs,
-        'scales': args.quantize_step_scales if args.quantize_step_scales is not None else qs,
-        'opacity': args.quantize_step_opacity if args.quantize_step_opacity is not None else qs,
-        'sh_dc': args.quantize_step_sh_dc if args.quantize_step_sh_dc is not None else qs,
-        'sh_rest': [args.quantize_step_sh_rest if args.quantize_step_sh_rest is not None else qs] * (3 * ((args.sh_degree + 1) ** 2 - 1)),
-    }
+    # Build quantize_step dict — overridden entirely if --quantize_config_json is provided
+    if args.quantize_config_json is not None:
+        import json as _json
+        with open(args.quantize_config_json) as _f:
+            _qp_data = _json.load(_f)
+        quantize_step = _qp_data["quantize_config"]
+        print(f"  Loaded quantize config: {args.quantize_config_json} (label: {_qp_data.get('label', '?')})")
+    else:
+        qs = args.quantize_step
+        quantize_step = {
+            'quats': args.quantize_step_quats if args.quantize_step_quats is not None else qs,
+            'scales': args.quantize_step_scales if args.quantize_step_scales is not None else qs,
+            'opacity': args.quantize_step_opacity if args.quantize_step_opacity is not None else qs,
+            'sh_dc': args.quantize_step_sh_dc if args.quantize_step_sh_dc is not None else qs,
+            'sh_rest': [args.quantize_step_sh_rest if args.quantize_step_sh_rest is not None else qs] * (3 * ((args.sh_degree + 1) ** 2 - 1)),
+        }
 
     device = args.device
     if device.startswith('cuda:'):
