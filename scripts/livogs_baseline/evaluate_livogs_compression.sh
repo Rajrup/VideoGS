@@ -51,7 +51,7 @@ output_folder="${data_path}/train_output/${DATASET_NAME}/${SEQUENCE_NAME}/compre
 echo "======================================================================"
 echo "Step 1: LiVoGS Compress + Decompress"
 echo "======================================================================"
-python compress/livogs/compress_decompress.py \
+python scripts/livogs_baseline/compress_decompress_pipeline.py \
     --ply_path "${gt_model_path}" \
     --output_folder "${output_folder}" \
     --output_ply_folder "${output_folder}/decompressed_ply" \
@@ -67,7 +67,7 @@ echo ""
 echo "======================================================================"
 echo "Step 2: Evaluate Decompression Quality"
 echo "======================================================================"
-python compress/evaluate_decompress.py \
+python scripts/evaluate_decompress.py \
     --gt_ply_path "${gt_model_path}" \
     --decompressed_ply_path "${output_folder}/decompressed_ply" \
     --dataset_path "${dataset_path}" \
