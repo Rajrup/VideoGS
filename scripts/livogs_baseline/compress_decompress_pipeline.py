@@ -22,6 +22,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 from plyfile import PlyData
 
+# --- Setup sys.path for LiVoGS imports ---
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _VIDEOGS_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))
 _LIVOGS_COMPRESSION = os.path.join(_VIDEOGS_ROOT, "LiVoGS", "compression")
