@@ -11,7 +11,7 @@ wrapper adding an unnecessary process layer.  This worker calls ``codec`` and
 
 Standalone usage::
 
-    CUDA_VISIBLE_DEVICES=0 python scripts/livogs_baseline/worker.py \\
+    CUDA_VISIBLE_DEVICES=0 python scripts/livogs_baseline/rd_pipeline/worker.py \
         --dataset_name HiFi4G_Dataset --sequence_name 4K_Actor1_Greeting \\
         --frame_id 0 --j 15 --qp_config_json path/to/qp.json
 """

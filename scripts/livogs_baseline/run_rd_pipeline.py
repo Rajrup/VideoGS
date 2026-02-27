@@ -20,15 +20,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 from numpy import arange
 
-# -- Sibling imports ----------------------------------------------------------
+# -- Subpackage imports -------------------------------------------------------
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import config
-from config import SequenceCfg
+from rd_pipeline import config
+from rd_pipeline.config import SequenceCfg
 
 # Lazy-import qp and plot so CUDA is NOT loaded in the orchestrator process
 # (GPU work only happens inside worker.py subprocesses).
-import qp as _qp
-import plot as _plot
+from rd_pipeline import qp as _qp
+from rd_pipeline import plot as _plot
 
 
 # ---------------------------------------------------------------------------
@@ -57,24 +57,28 @@ RLGR_BLOCK_SIZE = config.RLGR_BLOCK_SIZE
 DEVICE          = config.DEVICE
 
 STAGE2_GPUS = [0, 2, 3]
-STAGE2_WORKERS_PER_GPU = 1
+STAGE2_WORKERS_PER_GPU = 2
 STAGE2_DISABLE_IMAGE_AND_PLY_SAVING = False
 
 
-FRAME_IDS = [0, 50, 100, 150]
-RUN_EVALUATE = False
+FRAME_IDS = [0]
+RUN_EVALUATE = True
 SKIP_SAVED_EXPERIMENTS = True
 RUN_PLOT     = True
 
 EXPERIMENT_BETA_VALUES  = [0.0]
-EXPERIMENT_BASELINE_QPS = [0.1, 0.5] + list(arange(1, 21, 1))
-EXPERIMENT_DEPTHS       = [10, 12, 15, 18]
+EXPERIMENT_BASELINE_QPS = [v / 255.0 for v in [1, 2, 4, 8, 16, 32, 64, 128]]
+EXPERIMENT_DEPTHS       = [15, 14, 13, 12, 11, 10]
+
+EXPERIMENT_QP_QUATS   = config.BASELINE_QUANTIZE_STEP["quats"]    # default: 0.00005
+EXPERIMENT_QP_SCALES  = config.BASELINE_QUANTIZE_STEP["scales"]   # default: 0.0001
+EXPERIMENT_QP_OPACITY = config.BASELINE_QUANTIZE_STEP["opacity"]  # default: 0.0001
 
 PLOT_BETA_VALUES  = [0.0]
 PLOT_BASELINE_QPS = list(EXPERIMENT_BASELINE_QPS)
 PLOT_DEPTHS       = list(EXPERIMENT_DEPTHS)
 PLOT_MODES        = ["depth_under_beta"]
-PLOT_PSNR_RANGE: Optional[tuple[float, float]] = (35.0, 38.0)
+PLOT_PSNR_RANGE: Optional[tuple[float, float]] = (30, 40)
 
 QP_CONFIGS_ROOT = config.QP_CONFIGS_ROOT
 
@@ -265,6 +269,9 @@ def stage_generate(
             output_root=QP_CONFIGS_ROOT,
             data_path=DATA_PATH,
             selected_qp_dir_names=selected_qp_dir_names,
+            qp_quats=EXPERIMENT_QP_QUATS,
+            qp_scales=EXPERIMENT_QP_SCALES,
+            qp_opacity=EXPERIMENT_QP_OPACITY,
         )
         return True
     except Exception as e:
@@ -632,6 +639,10 @@ def main() -> None:
     print(
         f"  Experiment: beta_values={EXPERIMENT_BETA_VALUES}  baseline_qps={EXPERIMENT_BASELINE_QPS} "
         f"depths={EXPERIMENT_DEPTHS}"
+    )
+    print(
+        f"  Attr QPs:  quats={EXPERIMENT_QP_QUATS}  scales={EXPERIMENT_QP_SCALES} "
+        f"opacity={EXPERIMENT_QP_OPACITY}"
     )
     print(
         f"  Plotting:   beta_values={PLOT_BETA_VALUES}  baseline_qps={PLOT_BASELINE_QPS} "

@@ -9,7 +9,7 @@ worker and plots:
 
 Usable as a library (``plot.main(...)``) or standalone CLI::
 
-    python scripts/livogs_baseline/plot.py --frame_id 0 --output_root ...
+    python scripts/livogs_baseline/rd_pipeline/plot.py --frame_id 0 --output_root ...
 """
 
 import csv

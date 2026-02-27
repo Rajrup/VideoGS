@@ -130,28 +130,35 @@ def update_camera_images(cameras, dataset_path, frame, cam_file_paths, cam_resol
 
 def render_and_evaluate(gaussians, cameras, background, pipeline, psnr_metric, ssim_metric, save=False):
     """Render all cameras and compute metrics against GT images."""
-    metrics = {'psnr': [], 'ssim': []}
+    metrics_psnr = []
+    metrics_ssim = []
     rendered_images = []
 
     with torch.no_grad():
-        for cam in cameras:
+        gt_images = [
+            torch.clamp(cam.original_image.cuda(non_blocking=True), 0.0, 1.0)
+            for cam in cameras
+        ]
+
+        for cam, gt_image in zip(cameras, gt_images):
             render_pkg = render(cam, gaussians, pipeline, background)
             image = torch.clamp(render_pkg["render"], 0.0, 1.0)
-            gt_image = torch.clamp(cam.original_image.cuda(), 0.0, 1.0)
 
-            psnr_val = psnr_metric(image.unsqueeze(0), gt_image.unsqueeze(0)).item()
-            ssim_val = ssim_metric(image.unsqueeze(0), gt_image.unsqueeze(0)).item()
+            psnr_val = psnr_metric(image.unsqueeze(0), gt_image.unsqueeze(0))
+            ssim_val = ssim_metric(image.unsqueeze(0), gt_image.unsqueeze(0))
 
-            metrics['psnr'].append(psnr_val)
-            metrics['ssim'].append(ssim_val)
+            metrics_psnr.append(psnr_val)
+            metrics_ssim.append(ssim_val)
 
             if save:
-                rendered_images.append(image.cpu())
+                rendered_images.append(image.detach().cpu())
 
-            del render_pkg, image, gt_image
-            torch.cuda.empty_cache()
+            del render_pkg, image
 
-    avg_metrics = {k: np.mean(v) for k, v in metrics.items()}
+    avg_metrics = {
+        "psnr": torch.stack(metrics_psnr).mean().item(),
+        "ssim": torch.stack(metrics_ssim).mean().item(),
+    }
     return avg_metrics, rendered_images
 
 
@@ -232,7 +239,6 @@ def evaluate_decompression_quality(args):
             save=args.save_renders
         )
         del gt_gaussians
-        torch.cuda.empty_cache()
         t2 = time.time()
 
         # Evaluate Decompressed model
@@ -243,7 +249,6 @@ def evaluate_decompression_quality(args):
             save=args.save_renders
         )
         del decomp_gaussians
-        torch.cuda.empty_cache()
         t3 = time.time()
 
         print(f"  [Timing] update_images: {(t1-t0)*1000:.0f}ms, "
@@ -280,7 +285,6 @@ def evaluate_decompression_quality(args):
                         frame, "decomp_render")
 
         del gt_renders, decomp_renders
-        torch.cuda.empty_cache()
 
     # --- Summary ---
     if results:

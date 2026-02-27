@@ -39,7 +39,7 @@ cd ../../../
 python scripts/livogs_baseline/run_rd_pipeline.py
 
 # Single experiment
-python scripts/livogs_baseline/worker.py --dataset_name HiFi4G_Dataset --sequence_name 4K_Actor1_Greeting
+python scripts/livogs_baseline/rd_pipeline/worker.py --dataset_name HiFi4G_Dataset --sequence_name 4K_Actor1_Greeting
 ```
 
 ### Generate plots for HiFi4G Dataset

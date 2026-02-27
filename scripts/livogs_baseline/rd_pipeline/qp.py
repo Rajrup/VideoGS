@@ -9,7 +9,7 @@ Output: {output_root}/{qp_dir_name}/frame_{frame_id}/qp_{label}.json
 
 Usable as a library (``qp.generate(...)``) or standalone CLI::
 
-    python scripts/livogs_baseline/qp.py --baseline_qps 1 5 10
+    python scripts/livogs_baseline/rd_pipeline/qp.py --baseline_qps 1 5 10
 
 JSON schema::
 
@@ -143,12 +143,25 @@ def generate_qp_sets(
     return qp_sets
 
 
-def create_quantize_config(sh_values: list[float]) -> dict[str, Any]:
+def create_quantize_config(
+    sh_values: list[float],
+    qp_quats: Optional[float] = None,
+    qp_scales: Optional[float] = None,
+    qp_opacity: Optional[float] = None,
+) -> dict[str, Any]:
     """Build full quantize_config from per-channel SH QP values.
 
     *sh_values* has 48 entries (3 DC + 45 higher-order for SH degree 3).
+    Optional *qp_quats*, *qp_scales*, *qp_opacity* override the defaults from
+    ``config.BASELINE_QUANTIZE_STEP``; if ``None`` the baseline value is kept.
     """
     cfg: dict[str, Any] = dict(config.BASELINE_QUANTIZE_STEP)
+    if qp_quats is not None:
+        cfg["quats"] = qp_quats
+    if qp_scales is not None:
+        cfg["scales"] = qp_scales
+    if qp_opacity is not None:
+        cfg["opacity"] = qp_opacity
     if isinstance(sh_values, (list, tuple)) and len(sh_values) > 3:
         cfg["sh_dc"]   = list(sh_values[:3])
         cfg["sh_rest"] = list(sh_values[3:])
@@ -156,7 +169,6 @@ def create_quantize_config(sh_values: list[float]) -> dict[str, Any]:
         cfg["sh_dc"]   = sh_values
         cfg["sh_rest"] = sh_values
     return cfg
-
 
 # ---------------------------------------------------------------------------
 # Main generation entry point
@@ -172,6 +184,9 @@ def generate(
     j: int = config.J,
     device: str = config.DEVICE,
     selected_qp_dir_names: Optional[list[str]] = None,
+    qp_quats: Optional[float] = None,
+    qp_scales: Optional[float] = None,
+    qp_opacity: Optional[float] = None,
 ) -> None:
     """Generate QP config JSONs for given sequences, frames, and QP sweep.
 
@@ -230,7 +245,12 @@ def generate(
             os.makedirs(out_dir, exist_ok=True)
 
             for qp_set in qp_sets:
-                quantize_cfg = create_quantize_config(qp_set["values"])
+                quantize_cfg = create_quantize_config(
+                    qp_set["values"],
+                    qp_quats=qp_quats,
+                    qp_scales=qp_scales,
+                    qp_opacity=qp_opacity,
+                )
                 payload = {
                     "label":           qp_set["label"],
                     "baseline_qp":     qp_set["baseline_qp"],

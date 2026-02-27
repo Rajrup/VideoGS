@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Shared configuration, constants, and path builders for the LiVoGS RD pipeline.
 
-Every script in scripts/livogs_baseline/ imports from here instead of
+Every script in scripts/livogs_baseline/rd_pipeline/ imports from here instead of
 re-declaring DATA_PATH, SH_DEGREE, output-directory conventions, etc.
 """
 
@@ -14,9 +14,9 @@ from typing import TypedDict
 # ---------------------------------------------------------------------------
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-VIDEOGS_ROOT = os.path.dirname(os.path.dirname(THIS_DIR))
+VIDEOGS_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(THIS_DIR)))
 LIVOGS_COMPRESSION = os.path.join(VIDEOGS_ROOT, "LiVoGS", "compression")
-SCRIPTS_DIR = os.path.dirname(THIS_DIR)  # scripts/
+SCRIPTS_DIR = os.path.dirname(os.path.dirname(THIS_DIR))  # scripts/
 
 
 def setup_livogs_imports() -> None:
@@ -53,7 +53,7 @@ BASELINE_QUANTIZE_STEP: dict[str, float] = {
 }
 
 # Default QP configs output root
-QP_CONFIGS_ROOT = os.path.abspath(os.path.join(THIS_DIR, "../../results/rd_qp_configs"))
+QP_CONFIGS_ROOT = os.path.join(VIDEOGS_ROOT, "results", "rd_qp_configs")
 
 
 # ---------------------------------------------------------------------------

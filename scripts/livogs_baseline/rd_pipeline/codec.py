@@ -9,7 +9,7 @@ For each frame:
 
 Usable as a library (``codec.compress_decompress(...)``) or standalone CLI::
 
-    python scripts/livogs_baseline/codec.py --ply_path ... --output_folder ...
+    python scripts/livogs_baseline/rd_pipeline/codec.py --ply_path ... --output_folder ...
 """
 
 import csv
@@ -162,7 +162,6 @@ def compress_decompress(
     sh_color_space: str = config.SH_COLOR_SPACE,
     rlgr_block_size: int = config.RLGR_BLOCK_SIZE,
     device: str = config.DEVICE,
-    color_rescale: bool = True,
     skip_save_ply: bool = False,
 ) -> list[dict[str, Any]]:
     """Run LiVoGS compress + decompress for a range of frames.
@@ -201,7 +200,6 @@ def compress_decompress(
     print(f"  Quantize steps:     quats={quantize_step['quats']}, scales={quantize_step['scales']}, "
           f"opacity={quantize_step['opacity']}, sh_dc={quantize_step['sh_dc']}, sh_rest={quantize_step['sh_rest']}")
     print(f"  SH color space:     {sh_color_space}")
-    print(f"  Color rescale:      {color_rescale}")
     print(f"  RLGR block size:    {rlgr_block_size}")
     print("=" * 70)
 
@@ -218,7 +216,7 @@ def compress_decompress(
     torch.cuda.synchronize(device_id)
     compressed_state = encode_livogs(
         params, J=J, device=device, device_id=device_id,
-        sh_color_space=sh_color_space, color_rescale=color_rescale,
+        sh_color_space=sh_color_space,
         quantize_step=quantize_step, rlgr_block_size=rlgr_block_size,
     )
     torch.cuda.synchronize(device_id)
@@ -244,7 +242,7 @@ def compress_decompress(
         t_enc_start = time.perf_counter()
         compressed_state = encode_livogs(
             params, J=J, device=device, device_id=device_id,
-            sh_color_space=sh_color_space, color_rescale=color_rescale,
+            sh_color_space=sh_color_space,
             quantize_step=quantize_step, rlgr_block_size=rlgr_block_size,
         )
         torch.cuda.synchronize(device_id)
@@ -317,7 +315,6 @@ def compress_decompress(
             "J": J,
             "quantize_step": quantize_step,
             "sh_color_space": sh_color_space,
-            "color_rescale": color_rescale,
             "rlgr_block_size": rlgr_block_size,
             "sh_degree": sh_degree,
             "frame_start": frame_start,
@@ -390,8 +387,6 @@ if __name__ == "__main__":
     parser.add_argument("--quantize_step_sh_rest", type=float, default=None)
     parser.add_argument("--sh_color_space",     type=str, default=config.SH_COLOR_SPACE,
                         choices=["rgb", "yuv", "klt"])
-    parser.add_argument("--color_rescale",      action="store_true", default=True)
-    parser.add_argument("--no_color_rescale",   action="store_true")
     parser.add_argument("--rlgr_block_size",    type=int, default=config.RLGR_BLOCK_SIZE)
     parser.add_argument("--quantize_config_json", type=str, default=None,
                         help="Path to JSON with full quantize_config (overrides --quantize_step_*)")
@@ -399,9 +394,6 @@ if __name__ == "__main__":
     parser.add_argument("--skip_save_ply",      action="store_true",
                         help="Skip saving decompressed PLY files (fast mode)")
     args = parser.parse_args()
-
-    if args.no_color_rescale:
-        args.color_rescale = False
 
     # Build quantize_step dict
     if args.quantize_config_json is not None:
@@ -432,6 +424,5 @@ if __name__ == "__main__":
         sh_color_space=args.sh_color_space,
         rlgr_block_size=args.rlgr_block_size,
         device=args.device,
-        color_rescale=args.color_rescale,
         skip_save_ply=args.skip_save_ply,
     )
