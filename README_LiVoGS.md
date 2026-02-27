@@ -35,7 +35,11 @@ cd ../../../
 ### Run LiVoGS Compression on HiFi4G Dataset
 
 ```bash
-bash scripts/livogs_baseline/evaluate_livogs_compression.sh
+# Full RD-curve sweep (multi-QP, multi-GPU)
+python scripts/livogs_baseline/run_rd_pipeline.py
+
+# Single experiment
+python scripts/livogs_baseline/worker.py --dataset_name HiFi4G_Dataset --sequence_name 4K_Actor1_Greeting
 ```
 
 ### Generate plots for HiFi4G Dataset

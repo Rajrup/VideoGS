@@ -24,5 +24,32 @@ def mkdir_p(folder_path):
             raise
 
 def searchForMaxIteration(folder):
-    saved_iters = [int(fname.split("_")[-1]) for fname in os.listdir(folder)]
+    if not os.path.isdir(folder):
+        raise FileNotFoundError(f"Checkpoint folder not found: {folder}")
+
+    saved_iters = []
+    for fname in os.listdir(folder):
+        if not fname.startswith("iteration_"):
+            continue
+        suffix = fname.split("_")[-1]
+        if not suffix.isdigit():
+            continue
+
+        iter_dir = os.path.join(folder, fname)
+        if not os.path.isdir(iter_dir):
+            continue
+
+        ply_path = os.path.join(iter_dir, "point_cloud.ply")
+        if not os.path.isfile(ply_path):
+            continue
+
+        saved_iters.append(int(suffix))
+
+    if not saved_iters:
+        raise FileNotFoundError(
+            "No valid checkpoint iterations found in "
+            f"'{folder}'. Expected directories like "
+            "iteration_<N>/point_cloud.ply."
+        )
+
     return max(saved_iters)

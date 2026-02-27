@@ -207,8 +207,9 @@ def evaluate_decompression_quality(args):
         # GT PLY
         ckpt_path = os.path.join(args.gt_ply_path, str(frame), "point_cloud")
         if not os.path.exists(ckpt_path):
-            print(f"Warning: GT checkpoint not found: {ckpt_path}, skipping frame {frame}")
-            continue
+            raise FileNotFoundError(
+                f"GT checkpoint folder not found for frame {frame}: {ckpt_path}"
+            )
         max_iter = searchForMaxIteration(ckpt_path)
         gt_ply_file = os.path.join(ckpt_path, f"iteration_{max_iter}", "point_cloud.ply")
 
