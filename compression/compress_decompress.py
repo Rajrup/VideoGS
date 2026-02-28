@@ -190,4 +190,130 @@ def decode_videogs_video(frame_start, ch, input_group_path, output_group_path):
         ]
     subprocess.run(cmd, check=True)
 
+# ---------------------------------------------------------------------------
+# Channel ↔ QP mapping
+# ---------------------------------------------------------------------------
+
+def build_channel_qp_map(sh_degree, qp, qfd, qfr1, qfr2, qfr3, qo, qs, qr):
+    """Map each image channel index to its H.264 QP value.
+
+    Position high bytes (1, 3, 5) are always QP=0 (lossless).
+    Per-attribute QPs default to the main ``qp`` when not specified (None).
+
+    Channel layout (from quantize_videogs_image):
+      0,1  = x low/high      2,3  = y low/high      4,5  = z low/high
+      6,7,8 = nx, ny, nz
+      9,10,11 = f_dc_0, f_dc_1, f_dc_2
+      12..  = f_rest (band1, band2, band3 interleaved RGB)
+      ...   = opacity, scale_0..2, rot_0..3
+    """
+    qfd = qfd if qfd is not None else qp
+    qo = qo if qo is not None else qp
+    qs = qs if qs is not None else qp
+    qr = qr if qr is not None else qp
+
+    ch_map = {}
+
+    # Position
+    for i in range(3):
+        ch_map[2 * i] = qp          # low byte
+        ch_map[2 * i + 1] = 0       # high byte — always lossless
+
+    # Normals
+    for ch in (6, 7, 8):
+        ch_map[ch] = qp
+
+    # DC color
+    for ch in (9, 10, 11):
+        ch_map[ch] = qfd
+
+    # SH rest bands (band l has (2l+1)*3 channels)
+    band_sizes = [(2 * l + 1) * 3 for l in range(1, sh_degree + 1)]
+    band_qp_values = [
+        qfr1 if qfr1 is not None else qp,
+        qfr2 if qfr2 is not None else qp,
+        qfr3 if qfr3 is not None else qp,
+    ][:sh_degree]
+    ch_offset = 12
+    for band_sz, band_qp in zip(band_sizes, band_qp_values):
+        for j in range(band_sz):
+            ch_map[ch_offset + j] = band_qp
+        ch_offset += band_sz
+
+    # Opacity
+    ch_map[ch_offset] = qo
+    ch_offset += 1
+
+    # Scale
+    for j in range(3):
+        ch_map[ch_offset + j] = qs
+    ch_offset += 3
+
+    # Rotation
+    for j in range(4):
+        ch_map[ch_offset + j] = qr
+
+    # Cap DC/scale/rotation channels at QP=22 when their QP exceeds 22,
+    # matching the original compress_image_2_video.py behaviour.
+    capped = get_qp_capped_channels(sh_degree)
+    for ch in capped:
+        if ch in ch_map and ch_map[ch] > 22:
+            ch_map[ch] = 22
+
+    return ch_map
+
+
+# ---------------------------------------------------------------------------
+# Raw-video pipe helpers
+# ---------------------------------------------------------------------------
+
+def encode_channel_raw(raw_frames, image_size, ch_qp, output_mp4):
+    """Pipe a sequence of grayscale uint8 frames to ffmpeg for H.264 encoding."""
+    cmd = [
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-f", "rawvideo", "-pix_fmt", "gray",
+        "-s", f"{image_size}x{image_size}",
+        "-framerate", "25",
+        "-i", "pipe:0",
+        "-c:v", "libx264", "-qp", str(ch_qp),
+        "-pix_fmt", "yuvj444p",
+        output_mp4,
+    ]
+    raw_data = b"".join(frame.tobytes() for frame in raw_frames)
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    _, stderr = proc.communicate(input=raw_data)
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg encode failed for {output_mp4}: {stderr.decode()}")
+
+
+def decode_channel_raw(input_mp4, image_size, num_frames):
+    """Pipe H.264 MP4 through ffmpeg and return grayscale uint8 frames."""
+    cmd = [
+        "ffmpeg", "-loglevel", "error",
+        "-i", input_mp4,
+        "-f", "rawvideo", "-pix_fmt", "gray",
+        "pipe:1",
+    ]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stdout_data, stderr = proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"ffmpeg decode failed for {input_mp4}: {stderr.decode()}"
+        )
+    frame_bytes = image_size * image_size
+    expected_total = frame_bytes * num_frames
+    if len(stdout_data) != expected_total:
+        raise RuntimeError(
+            f"Expected {expected_total} bytes, got {len(stdout_data)} from {input_mp4}"
+        )
+    frames = []
+    for i in range(num_frames):
+        offset = i * frame_bytes
+        frames.append(
+            np.frombuffer(
+                stdout_data, dtype=np.uint8, count=frame_bytes, offset=offset
+            ).reshape(image_size, image_size)
+        )
+    return frames
+
 

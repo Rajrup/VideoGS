@@ -241,3 +241,7 @@ submodules/simple-knn/simple_knn.egg-info
 *.egg-info/
 *.code-workspace
 HiFi4G.png
+scripts/dracogs_baseline/plots/plots
+scripts/videogs_baseline/plots/plots
+scripts/livogs_baseline/plots/plots
+scripts/mesongs_baseline/plots/plots

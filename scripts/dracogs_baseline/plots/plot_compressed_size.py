@@ -1,10 +1,10 @@
 """
-Plot VideoGS compressed size breakdown and point count per frame.
-Requires: benchmark_videogs_pipeline.csv under input_folder/<output_tag>/
+Plot DracoGS compressed size and point counts per frame.
+Requires: benchmark_dracogs.csv under input_folder/<config_name>/
 
 Generates two plots:
-  1. Size: uncompressed vs compressed (MP4)
-  2. Point count: original_points per frame
+  1. Size: uncompressed vs total compressed per frame
+  2. Point counts: original vs decoded
 """
 import os
 import argparse
@@ -12,23 +12,7 @@ import csv
 import matplotlib.pyplot as plt
 
 
-def add_qp_args(parser):
-    parser.add_argument("--qp", type=int, default=22)
-    parser.add_argument("--qfd", type=int, default=22)
-    parser.add_argument("--qfr1", type=int, default=22)
-    parser.add_argument("--qfr2", type=int, default=22)
-    parser.add_argument("--qfr3", type=int, default=22)
-    parser.add_argument("--qo", type=int, default=22)
-    parser.add_argument("--qs", type=int, default=22)
-    parser.add_argument("--qr", type=int, default=22)
-
-
-def build_output_tag(args):
-    return (f"qp_{args.qp}_qfd_{args.qfd}_qfr1_{args.qfr1}_qfr2_{args.qfr2}"
-            f"_qfr3_{args.qfr3}_qo_{args.qo}_qs_{args.qs}_qr_{args.qr}")
-
-
-def load_pipeline_csv(path):
+def load_benchmark_csv(path):
     rows = []
     with open(path) as f:
         r = csv.DictReader(f)
@@ -38,6 +22,7 @@ def load_pipeline_csv(path):
                 "uncompressed_size_bytes": int(row["uncompressed_size_bytes"]),
                 "compressed_size_bytes": int(row["compressed_size_bytes"]),
                 "original_points": int(row["original_points"]),
+                "decoded_points": int(row["decoded_points"]),
             })
     return sorted(rows, key=lambda x: x["frame"])
 
@@ -45,39 +30,39 @@ def load_pipeline_csv(path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_folder", type=str, required=True,
-                        help="Base folder for videogs_compression")
+                        help="Base folder for dracogs compression output")
     parser.add_argument("--dataset_name", type=str, required=True)
     parser.add_argument("--sequence_name", type=str, required=True)
-    add_qp_args(parser)
-    parser.add_argument("--output_folder", type=str, required=True,
-                        help="Output folder for plot PNG")
+    parser.add_argument("--config_name", type=str, required=True,
+                        help="Config subfolder name (e.g. qp_16_qfd_16_..._cl_7)")
+    parser.add_argument("--output_folder", type=str, required=True)
     args = parser.parse_args()
 
-    output_tag = build_output_tag(args)
-    config_dir = os.path.join(args.input_folder, output_tag)
-    csv_path = os.path.join(config_dir, "benchmark_videogs_pipeline.csv")
-    out_dir = os.path.join(args.output_folder, "plots", args.dataset_name, args.sequence_name, output_tag)
+    config_dir = os.path.join(args.input_folder, args.config_name)
+    csv_path = os.path.join(config_dir, "benchmark_dracogs.csv")
+    out_dir = os.path.join(args.output_folder, "plots", args.dataset_name, args.sequence_name, args.config_name)
     os.makedirs(out_dir, exist_ok=True)
 
     if not os.path.isfile(csv_path):
         raise SystemExit(f"Required file not found: {csv_path}")
 
-    rows = load_pipeline_csv(csv_path)
+    rows = load_benchmark_csv(csv_path)
     n = len(rows)
     frame_ids = [r["frame"] for r in rows]
     x = range(n)
-    tick_every = 10
+    tick_every = max(1, n // 20)
 
+    # ---- Plot 1: Size ----
     uncompressed_mb = [r["uncompressed_size_bytes"] / 1024 / 1024 for r in rows]
-    compressed_mb = [r["compressed_size_bytes"] / 1024 / 1024 for r in rows]
+    total_mb = [r["compressed_size_bytes"] / 1024 / 1024 for r in rows]
 
-    # ---- Plot 1: Size breakdown ----
     fig, ax = plt.subplots(figsize=(12, 5))
-    ax.plot(x, uncompressed_mb, "o-", label="Uncompressed", color="gray", markersize=2, alpha=0.7)
-    ax.plot(x, compressed_mb, "s-", label="Compressed (MP4)", color="coral", markersize=2)
+    ax.plot(x, uncompressed_mb, "o-", label="Uncompressed", color="gray", markersize=3, alpha=0.7)
+    ax.plot(x, total_mb, "s-", label="DracoGS compressed", color="coral", markersize=3)
+
     ax.set_xlabel("Frame")
     ax.set_ylabel("Size (MB)")
-    ax.set_title(f"VideoGS size per frame [{output_tag}]\n{args.dataset_name}/{args.sequence_name}")
+    ax.set_title(f"DracoGS size per frame [{args.config_name}, {args.dataset_name}, {args.sequence_name}]")
     ax.set_ylim(bottom=0)
     ax.set_xticks(list(x)[::tick_every])
     ax.set_xticklabels(frame_ids[::tick_every], rotation=90)
@@ -85,10 +70,10 @@ def main():
     ax.grid(True, alpha=0.3)
 
     avg_unc = sum(uncompressed_mb) / n
-    avg_comp = sum(compressed_mb) / n
-    ratio = avg_unc / avg_comp if avg_comp > 0 else 0
+    avg_tot = sum(total_mb) / n
+    ratio = avg_tot / avg_unc * 100 if avg_unc > 0 else 0
     ax.annotate(
-        f"avg uncompressed={avg_unc:.2f} MB, compressed={avg_comp:.2f} MB ({ratio:.1f}x)",
+        f"avg uncompressed={avg_unc:.2f} MB, compressed={avg_tot:.2f} MB ({ratio:.1f}%)",
         xy=(0.02, 0.95), xycoords="axes fraction",
         fontsize=9, va="top",
         bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8),
@@ -102,12 +87,15 @@ def main():
 
     # ---- Plot 2: Point counts ----
     orig_pts = [r["original_points"] for r in rows]
+    decoded_pts = [r["decoded_points"] for r in rows]
 
     fig, ax = plt.subplots(figsize=(12, 5))
-    ax.plot(x, orig_pts, "o-", label="Original points", color="steelblue", markersize=2)
+    ax.plot(x, orig_pts, "o-", label="Original", color="steelblue", markersize=3)
+    ax.plot(x, decoded_pts, "s-", label="Decoded", color="coral", markersize=3)
+
     ax.set_xlabel("Frame")
     ax.set_ylabel("Number of Gaussians")
-    ax.set_title(f"VideoGS point count per frame\n{args.dataset_name}/{args.sequence_name}")
+    ax.set_title(f"Point counts per frame [{args.config_name}, {args.dataset_name}, {args.sequence_name}]")
     ax.set_ylim(bottom=0)
     ax.set_xticks(list(x)[::tick_every])
     ax.set_xticklabels(frame_ids[::tick_every], rotation=90)
@@ -115,8 +103,10 @@ def main():
     ax.grid(True, alpha=0.3)
 
     avg_orig = sum(orig_pts) / n
+    avg_dec = sum(decoded_pts) / n
+    dec_ratio = avg_dec / avg_orig * 100 if avg_orig > 0 else 0
     ax.annotate(
-        f"avg original points = {avg_orig:.0f}",
+        f"avg original={avg_orig:.0f}, decoded={avg_dec:.0f} ({dec_ratio:.1f}%)",
         xy=(0.02, 0.95), xycoords="axes fraction",
         fontsize=9, va="top",
         bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8),
