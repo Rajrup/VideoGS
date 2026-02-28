@@ -37,7 +37,7 @@ QFR3=16
 QO=16
 QS=16
 QR=16
-CL=10
+CL=1
 
 # --- Parse named arguments ---
 while [[ $# -gt 0 ]]; do

@@ -3,7 +3,7 @@
 # Plot benchmark results for DracoGS compression
 DATASET_NAME="HiFi4G_Dataset"
 SEQUENCE_NAME="4K_Actor1_Greeting"
-CONFIG_NAME="qp_16_qfd_16_qfr1_16_qfr2_16_qfr3_16_qo_16_qs_16_qr_16_cl_10"
+CONFIG_NAME="qp_16_qfd_16_qfr1_16_qfr2_16_qfr3_16_qo_16_qs_16_qr_16_cl_1"
 
 working_dir="/home/rajrup/Project/VideoGS"
 data_path="/synology/rajrup/VideoGS"
