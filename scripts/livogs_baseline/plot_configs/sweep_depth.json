@@ -1,0 +1,26 @@
+[
+    {
+        "psnr_range": null,
+        "plots": [
+            {
+                "curve_var": "depth",
+                "fixed": {
+                    "beta": 0.0,
+                    "sh_qp": 0.003921568627451
+                }
+            }
+        ]
+    },
+    {
+        "psnr_range": [25.0, 45.0],
+        "plots": [
+            {
+                "curve_var": "sh_qp",
+                "fixed": {
+                    "beta": 0.0,
+                    "depth": 13
+                }
+            }
+        ]
+    }
+]

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # pyright: reportMissingImports=false, reportMissingTypeStubs=false
 import csv
+import inspect
 import os
 import sys
-from typing import Any, Dict, List, Tuple, TypedDict
+from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -27,6 +28,9 @@ from gpu_octree_codec import calc_morton
 from merge_cluster_cuda import merge_gaussian_clusters_with_indices
 from voxelize_pc import voxelize_pc
 
+
+_DEPLOY_SUPPORTS_COLOR_RESCALE = "color_rescale" in inspect.signature(deploy_compress_decompress).parameters
+
 BASELINE_QPS = [0.001, 0.005, 0.01, 0.02, 0.03, 0.04]
 BETA_VALUES = [0.0, 0.4, 0.8, 1.2, 1.6, 2.0]
 J = 15
@@ -39,6 +43,26 @@ BASELINE_QUANTIZE_STEP: Dict[str, float] = {
     "opacity": 0.0001,
 }
 OUTPUT_DIR = os.path.abspath(os.path.join(_THIS_DIR, "../../results/frame0_rd_experiments"))
+
+
+def _parse_float_list_env(var_name: str) -> Optional[List[float]]:
+    raw = os.getenv(var_name, "").strip()
+    if not raw:
+        return None
+    values = [item.strip() for item in raw.split(",") if item.strip()]
+    if not values:
+        return None
+    return [float(item) for item in values]
+
+
+_env_baseline_qps = _parse_float_list_env("FRAME0_BASELINE_QPS")
+RUNTIME_BASELINE_QPS = _env_baseline_qps if _env_baseline_qps is not None else BASELINE_QPS
+
+_env_beta_values = _parse_float_list_env("FRAME0_BETA_VALUES")
+RUNTIME_BETA_VALUES = _env_beta_values if _env_beta_values is not None else BETA_VALUES
+
+_env_output_dir = os.getenv("FRAME0_OUTPUT_DIR", "").strip()
+RUNTIME_OUTPUT_DIR = os.path.abspath(_env_output_dir) if _env_output_dir else OUTPUT_DIR
 
 
 class SequenceConfig(TypedDict):
@@ -193,20 +217,23 @@ def run_single_experiment(
     os.makedirs(exp_output_dir, exist_ok=True)
     quantize_config = create_quantize_config(qp_set["values"])
 
+    deploy_kwargs: Dict[str, Any] = {
+        "ckpt_path": checkpoint_path,
+        "J": J,
+        "output_dir": exp_output_dir,
+        "device": device,
+        "sh_color_space": SH_COLOR_SPACE,
+        "use_entropy_encoding": True,
+        "quantize_step": quantize_config,
+        "dataset_config": dataset_config,
+        "verify_lossless_checks": False,
+        "save_images": False,
+    }
+    if _DEPLOY_SUPPORTS_COLOR_RESCALE:
+        deploy_kwargs["color_rescale"] = COLOR_RESCALE
+
     try:
-        results = deploy_compress_decompress(
-            ckpt_path=checkpoint_path,
-            J=J,
-            output_dir=exp_output_dir,
-            device=device,
-            sh_color_space=SH_COLOR_SPACE,
-            color_rescale=COLOR_RESCALE,
-            use_entropy_encoding=True,
-            quantize_step=quantize_config,
-            dataset_config=dataset_config,
-            verify_lossless_checks=False,
-            save_images=False,
-        )
+        results = deploy_compress_decompress(**deploy_kwargs)
 
         psnr_avg = results["rendering_metrics"]["decoded"]["psnr_avg"]
         attr_bytes = results["attribute_compression"]["compressed_bytes"]
@@ -283,14 +310,14 @@ def plot_rd_curves(results: List[Dict[str, Any]], output_path: str, seq_name: st
 
 
 def main():
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    print(f"Saving outputs to: {OUTPUT_DIR}")
+    os.makedirs(RUNTIME_OUTPUT_DIR, exist_ok=True)
+    print(f"Saving outputs to: {RUNTIME_OUTPUT_DIR}")
 
     for seq in SEQUENCES:
         seq_name = seq["name"]
         checkpoint_path = seq["checkpoint_path"]
         dataset_config = seq["dataset_config"]
-        seq_output_dir = os.path.join(OUTPUT_DIR, seq_name)
+        seq_output_dir = os.path.join(RUNTIME_OUTPUT_DIR, seq_name)
         os.makedirs(seq_output_dir, exist_ok=True)
 
         print(f"\n{'=' * 80}")
@@ -298,7 +325,7 @@ def main():
         print(f"Checkpoint: {checkpoint_path}")
 
         rms, rms_max = compute_energy_rms(checkpoint_path, J, DEVICE)
-        qp_sets = generate_qp_sets(rms, rms_max, BASELINE_QPS, BETA_VALUES)
+        qp_sets = generate_qp_sets(rms, rms_max, RUNTIME_BASELINE_QPS, RUNTIME_BETA_VALUES)
 
         sequence_results = []
         for qp_set in qp_sets:

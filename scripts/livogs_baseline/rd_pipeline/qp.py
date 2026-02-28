@@ -3,19 +3,19 @@
 """Generate per-channel QP configs for LiVoGS RD experiments.
 
 For each (sequence, frame), computes SH energy RMS in KLT3 space and generates
-JSON QP config files for all (baseline_qp, beta) combinations.
+JSON QP config files for all (sh_qp, beta) combinations.
 
 Output: {output_root}/{qp_dir_name}/frame_{frame_id}/qp_{label}.json
 
 Usable as a library (``qp.generate(...)``) or standalone CLI::
 
-    python scripts/livogs_baseline/rd_pipeline/qp.py --baseline_qps 1 5 10
+    python scripts/livogs_baseline/rd_pipeline/qp.py --sh_qps 1 5 10
 
 JSON schema::
 
     {
-        "label":           "qp0.005_beta_0.8",
-        "baseline_qp":     float,
+        "label":           "shqp0.005_beta_0.8",
+        "sh_qp":           float,
         "beta":            float,
         "frame_id":        int,
         "sequence_name":   str,
@@ -118,25 +118,25 @@ def compute_energy_rms(
 def generate_qp_sets(
     rms: np.ndarray[Any, Any],
     rms_max: float,
-    baseline_qps: list[float],
+    sh_qps: list[float],
     beta_values: list[float],
 ) -> list[dict[str, Any]]:
-    """Generate QP value sets for all (baseline_qp, beta) combinations.
+    """Generate QP value sets for all (sh_qp, beta) combinations.
 
-    For beta=0: uniform QPs (all channels get baseline_qp).
+    For beta=0: uniform QPs (all channels get sh_qp).
     For beta>0: channels with lower RMS (less energy) get higher QP (coarser).
     """
     safe_rms = np.where(rms > 0, rms, rms.max() * 1e-6)
     qp_sets: list[dict[str, Any]] = []
     set_id = 0
-    for baseline_qp in baseline_qps:
+    for sh_qp in sh_qps:
         for beta in beta_values:
-            qps = baseline_qp * (rms_max / safe_rms) ** beta
+            qps = sh_qp * (rms_max / safe_rms) ** beta
             qp_sets.append({
                 "id": set_id,
-                "label": f"qp{baseline_qp}_beta_{beta:.1f}",
+                "label": f"shqp{sh_qp}_beta_{beta:.1f}",
                 "values": qps.tolist(),
-                "baseline_qp": baseline_qp,
+                "sh_qp": sh_qp,
                 "beta": beta,
             })
             set_id += 1
@@ -177,16 +177,16 @@ def create_quantize_config(
 def generate(
     sequences: list[config.SequenceCfg],
     frame_ids: list[int],
-    baseline_qps: list[float],
+    sh_qps: list[float],
     beta_values: list[float],
     output_root: str = config.QP_CONFIGS_ROOT,
     data_path: str = config.DATA_PATH,
     j: int = config.J,
     device: str = config.DEVICE,
     selected_qp_dir_names: Optional[list[str]] = None,
-    qp_quats: Optional[float] = None,
-    qp_scales: Optional[float] = None,
-    qp_opacity: Optional[float] = None,
+    qp_quats_list: Optional[list[float]] = None,
+    qp_scales_list: Optional[list[float]] = None,
+    qp_opacity_list: Optional[list[float]] = None,
 ) -> None:
     """Generate QP config JSONs for given sequences, frames, and QP sweep.
 
@@ -239,32 +239,42 @@ def generate(
             rms, rms_max = compute_energy_rms(ckpt_path, j, device)
             print(f"  RMS: shape={rms.shape}  min={rms.min():.4f}  max={rms_max:.4f}")
 
-            qp_sets = generate_qp_sets(rms, rms_max, baseline_qps, beta_values)
+            qp_sets = generate_qp_sets(rms, rms_max, sh_qps, beta_values)
+
+            _qp_quats = qp_quats_list or [config.BASELINE_QUANTIZE_STEP["quats"]]
+            _qp_scales = qp_scales_list or [config.BASELINE_QUANTIZE_STEP["scales"]]
+            _qp_opacity = qp_opacity_list or [config.BASELINE_QUANTIZE_STEP["opacity"]]
+            multi_attr = (len(_qp_quats) > 1 or len(_qp_scales) > 1 or len(_qp_opacity) > 1)
 
             out_dir = config.qp_json_output_dir(output_root, qp_dir_name, frame_id)
             os.makedirs(out_dir, exist_ok=True)
 
+            total_configs = len(qp_sets) * len(_qp_quats) * len(_qp_scales) * len(_qp_opacity)
             for qp_set in qp_sets:
-                quantize_cfg = create_quantize_config(
-                    qp_set["values"],
-                    qp_quats=qp_quats,
-                    qp_scales=qp_scales,
-                    qp_opacity=qp_opacity,
-                )
-                payload = {
-                    "label":           qp_set["label"],
-                    "baseline_qp":     qp_set["baseline_qp"],
-                    "beta":            qp_set["beta"],
-                    "frame_id":        frame_id,
-                    "sequence_name":   qp_dir_name,
-                    "octree_depth":    j,
-                    "quantize_config": quantize_cfg,
-                }
-                out_path = os.path.join(out_dir, f"qp_{qp_set['label']}.json")
-                with open(out_path, "w") as f:
-                    json.dump(payload, f, indent=2)
+                for qp_quats in _qp_quats:
+                    for qp_scales in _qp_scales:
+                        for qp_opacity in _qp_opacity:
+                            quantize_cfg = create_quantize_config(
+                                qp_set["values"], qp_quats, qp_scales, qp_opacity,
+                            )
+                            label = f"shqp{qp_set['sh_qp']}_b{qp_set['beta']:.1f}_q{qp_quats}_s{qp_scales}_o{qp_opacity}"
+                            payload = {
+                                "label": label,
+                                "sh_qp": qp_set["sh_qp"],
+                                "beta": qp_set["beta"],
+                                "qp_quats": qp_quats,
+                                "qp_scales": qp_scales,
+                                "qp_opacity": qp_opacity,
+                                "frame_id": frame_id,
+                                "sequence_name": qp_dir_name,
+                                "octree_depth": j,
+                                "quantize_config": quantize_cfg,
+                            }
+                            out_path = os.path.join(out_dir, f"qp_{label}.json")
+                            with open(out_path, "w") as f:
+                                json.dump(payload, f, indent=2)
 
-            print(f"  Saved {len(qp_sets)} QP configs → {out_dir}")
+            print(f"  Saved {total_configs} QP configs → {out_dir}")
             torch.cuda.empty_cache()
 
     print(f"\n{'=' * 70}")
@@ -283,7 +293,7 @@ _STANDALONE_SEQUENCES: list[config.SequenceCfg] = [
     },
 ]
 
-_STANDALONE_BASELINE_QPS = [0.001, 0.005, 0.01, 0.02, 0.03, 0.04]
+_STANDALONE_SH_QPS = [0.001, 0.005, 0.01, 0.02, 0.03, 0.04]
 _STANDALONE_BETA_VALUES  = [0.0, 0.4, 0.8, 1.0, 1.2, 1.6, 2.0]
 _STANDALONE_FRAME_IDS    = [0]
 
@@ -295,10 +305,16 @@ if __name__ == "__main__":
     )
     _parser.add_argument("--output_dir",   default=None,
                          help="Override output root (absolute path)")
-    _parser.add_argument("--baseline_qps", nargs="+", type=float, default=None,
-                         help="Override BASELINE_QPS (space-separated floats)")
+    _parser.add_argument("--sh_qps", nargs="+", type=float, default=None,
+                         help="Override SH_QPS (space-separated floats)")
     _parser.add_argument("--beta_values",  nargs="+", type=float, default=None,
                          help="Override BETA_VALUES (space-separated floats)")
+    _parser.add_argument("--qp_quats", nargs="+", type=float, default=None,
+                         help="Override attr QP list for quats")
+    _parser.add_argument("--qp_scales", nargs="+", type=float, default=None,
+                         help="Override attr QP list for scales")
+    _parser.add_argument("--qp_opacity", nargs="+", type=float, default=None,
+                         help="Override attr QP list for opacity")
     _parser.add_argument("--frame_ids",    nargs="+", type=int,   default=None,
                          help="Override FRAME_IDS (space-separated ints)")
     _parser.add_argument("--qp_dir_names", nargs="+", default=None,
@@ -308,8 +324,11 @@ if __name__ == "__main__":
     generate(
         sequences=_STANDALONE_SEQUENCES,
         frame_ids=_args.frame_ids or _STANDALONE_FRAME_IDS,
-        baseline_qps=_args.baseline_qps or _STANDALONE_BASELINE_QPS,
+        sh_qps=_args.sh_qps or _STANDALONE_SH_QPS,
         beta_values=_args.beta_values or _STANDALONE_BETA_VALUES,
         output_root=_args.output_dir or config.QP_CONFIGS_ROOT,
         selected_qp_dir_names=_args.qp_dir_names,
+        qp_quats_list=_args.qp_quats,
+        qp_scales_list=_args.qp_scales,
+        qp_opacity_list=_args.qp_opacity,
     )
