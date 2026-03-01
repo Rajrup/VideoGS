@@ -15,13 +15,14 @@ import csv
 import glob
 import json
 import os
+import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Optional
 
 # -- Subpackage imports -------------------------------------------------------
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 from rd_pipeline import config
 from rd_pipeline.config import SequenceCfg
 
@@ -58,23 +59,21 @@ DEVICE          = config.DEVICE
 
 STAGE2_GPUS = [0, 2, 3]
 STAGE2_WORKERS_PER_GPU = 2
-STAGE2_DISABLE_IMAGE_AND_PLY_SAVING = False
-
-
-FRAME_IDS = [0, 50, 100, 150]
-RUN_EVALUATE = False
+STAGE2_DISABLE_IMAGE_AND_PLY_SAVING = True
+RUN_EVALUATE = True
 SKIP_SAVED_EXPERIMENTS = True
 RUN_PLOT     = True
 
+FRAME_IDS = [0, 50, 100, 150]
 EXPERIMENT_BETA_VALUES = [0.0]
 EXPERIMENT_SH_QPS = [v / 255.0 for v in [1, 2, 4, 8, 16, 32, 64, 128]]
 # Stage-2 evaluates this depth list. Plot aggregation may use only a subset
 # selected from PLOTS (see _depths_needed_for_plotting).
 EXPERIMENT_DEPTHS = [14, 13, 12, 11, 10, 9, 8]
 
-EXPERIMENT_QP_QUATS: list[float] = [0.0001, 0.001, 0.01, 0.1]
+EXPERIMENT_QP_QUATS: list[float] = [0.0001, 0.001, 0.005, 0.01, 0.03, 0.05]
 EXPERIMENT_QP_SCALES: list[float] = [0.0001, 0.001, 0.01, 0.1]
-EXPERIMENT_QP_OPACITY: list[float] = [0.0001, 0.001, 0.01, 0.1]
+EXPERIMENT_QP_OPACITY: list[float] = [0.0001, 0.001, 0.01, 0.1, 0.5, 1, 2]
 
 PLOT_PSNR_RANGE: Optional[tuple[float, float]] = (30, 40)
 
@@ -90,23 +89,9 @@ PLOT_PSNR_RANGE: Optional[tuple[float, float]] = (30, 40)
 # Important: any knob not in fixed (for example sh_qp) is not filtered and will
 # include all available values in all_results.csv.
 PLOTS: list[dict[str, Any]] = [
-    {
-        # depth, sh_qp, beta, qp_quats, qp_scales, qp_opacity
-        "curve_var": "qp_opacity",
-        "fixed": {
-            "qp_quats": 0.0001,
-            "qp_scales": 0.0001,
-            # "qp_opacity": 0.0001,
-            "depth": 13,
-            "beta": 0.0,
-        },
-    },
 ]
-
-# Additional plot config files (JSON).  Plots from these are ADDED to the inline PLOTS above.
-# Each JSON: {"plots": [...], "psnr_range": [min, max] | null}.
 PLOT_CONFIG_JSONS: list[str] = [
-    # "scripts/livogs_baseline/plot_configs/sweep_opacity.json",
+    os.path.join(SCRIPT_DIR, "plot_configs", "default.json"),
 ]
 
 QP_CONFIGS_ROOT = config.QP_CONFIGS_ROOT
@@ -144,6 +129,24 @@ def _run_subprocess(label: str, cmd: list[str], cwd: str = config.VIDEOGS_ROOT,
         return False
     return True
 
+
+def _remove_failed_experiment(
+    seq: SequenceCfg,
+    frame_id: int,
+    depth: int,
+    label: str,
+) -> None:
+    """Remove the output directory for a failed/interrupted experiment.
+
+    This prevents partial results from being treated as complete when
+    SKIP_SAVED_EXPERIMENTS is True on the next run.
+    """
+    exp_dir = config.experiment_dir(
+        DATA_PATH, seq["dataset_name"], seq["sequence_name"], frame_id, depth, label,
+    )
+    if os.path.isdir(exp_dir):
+        shutil.rmtree(exp_dir, ignore_errors=True)
+        print(f"  [CLEANUP] Removed partial results for failed experiment: {exp_dir}")
 
 def find_qp_jsons(seq: SequenceCfg, frame_id: int) -> list[str]:
     """Return sorted list of QP config JSON paths for a given sequence + frame."""
@@ -552,6 +555,7 @@ def stage_evaluate(seq: SequenceCfg, frame_id: int, depths: list[int]) -> list[s
             )
             if not ok:
                 failed.append(f"{job.label}/J_{job.depth}")
+                _remove_failed_experiment(seq, frame_id, job.depth, job.label)
         return failed
 
     with ThreadPoolExecutor(max_workers=total_workers) as executor:
@@ -571,6 +575,7 @@ def stage_evaluate(seq: SequenceCfg, frame_id: int, depths: list[int]) -> list[s
             ok = future.result()
             if not ok:
                 failed.append(f"{job.label}/J_{job.depth}")
+                _remove_failed_experiment(seq, frame_id, job.depth, job.label)
 
     return failed
 
@@ -825,7 +830,7 @@ def resolve_plot_groups() -> list[dict[str, Any]]:
     if PLOTS:
         groups.append({"source": "inline", "plots": PLOTS, "psnr_range": PLOT_PSNR_RANGE})
     for path in PLOT_CONFIG_JSONS:
-        abs_path = path if os.path.isabs(path) else os.path.join(config.VIDEOGS_ROOT, path)
+        abs_path = path if os.path.isabs(path) else os.path.join(SCRIPT_DIR, path)
         if not os.path.isfile(abs_path):
             print(f"[WARN] Plot config JSON not found: {abs_path}")
             continue
