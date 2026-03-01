@@ -59,7 +59,8 @@ DEVICE          = config.DEVICE
 
 STAGE2_GPUS = [0, 2, 3]
 STAGE2_WORKERS_PER_GPU = 2
-STAGE2_DISABLE_IMAGE_AND_PLY_SAVING = True
+STAGE2_ENABLE_IMAGE_SAVING = True
+STAGE2_ENABLE_PLY_SAVING = False
 RUN_EVALUATE = True
 SKIP_SAVED_EXPERIMENTS = True
 RUN_PLOT     = True
@@ -468,7 +469,7 @@ def stage_evaluate(seq: SequenceCfg, frame_id: int, depths: list[int]) -> list[s
     jobs: list[Stage2Job] = []
     skipped_saved = 0
     skipped_frame_mismatch = 0
-    require_evaluation = not STAGE2_DISABLE_IMAGE_AND_PLY_SAVING
+    require_evaluation = STAGE2_ENABLE_IMAGE_SAVING
     for json_path in json_files:
         label = os.path.splitext(os.path.basename(json_path))[0]
         qp_frame_id: Optional[int] = None
@@ -522,8 +523,10 @@ def stage_evaluate(seq: SequenceCfg, frame_id: int, depths: list[int]) -> list[s
                 "--qp_config_json",  json_path,
                 "--device",          "cuda:0",
             ]
-            if STAGE2_DISABLE_IMAGE_AND_PLY_SAVING:
-                cmd.append("--disable_image_and_ply_saving")
+            if not STAGE2_ENABLE_PLY_SAVING:
+                cmd.append("--disable_ply_saving")
+            if not STAGE2_ENABLE_IMAGE_SAVING:
+                cmd.append("--disable_image_saving")
 
             env = os.environ.copy()
             env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
@@ -858,7 +861,7 @@ def main() -> None:
     print(f"  Sequences:  {[s['sequence_name'] for s in SEQUENCES]}")
     print(f"  Frame IDs:  {FRAME_IDS}")
     print(f"  Stages:     evaluate={RUN_EVALUATE}  plot={RUN_PLOT}")
-    print(f"  Stage-2:    gpus={STAGE2_GPUS} workers_per_gpu={STAGE2_WORKERS_PER_GPU} fast_no_save={STAGE2_DISABLE_IMAGE_AND_PLY_SAVING}")
+    print(f"  Stage-2:    gpus={STAGE2_GPUS} workers_per_gpu={STAGE2_WORKERS_PER_GPU} enable_image_saving={STAGE2_ENABLE_IMAGE_SAVING} enable_ply_saving={STAGE2_ENABLE_PLY_SAVING}")
     print(f"  Stage-2:    skip_saved_experiments={SKIP_SAVED_EXPERIMENTS}")
     print(f"  QP configs: {QP_CONFIGS_ROOT}")
     print(
@@ -898,7 +901,7 @@ def main() -> None:
                     all_failures += [f"{seq['sequence_name']}/frame_{frame_id}/{f}" for f in failed]
 
             if RUN_PLOT:
-                if RUN_EVALUATE and STAGE2_DISABLE_IMAGE_AND_PLY_SAVING:
+                if RUN_EVALUATE and not STAGE2_ENABLE_IMAGE_SAVING:
                     print(
                         "[WARN] Stage-2 fast mode skips quality evaluation for new runs; "
                         "Stage 3 plotting will only use experiments that already have "

@@ -65,8 +65,10 @@ def main() -> None:
                         help="Path to QP config JSON (overrides --quantize_step)")
     parser.add_argument("--device",         default="cuda:0",
                         help="Torch device for codec (use cuda:0 with CUDA_VISIBLE_DEVICES pinning)")
-    parser.add_argument("--disable_image_and_ply_saving", action="store_true",
-                        help="Fast mode: skip PLY save and quality evaluation")
+    parser.add_argument("--disable_ply_saving", action="store_true",
+                        help="Skip saving decompressed PLY files")
+    parser.add_argument("--disable_image_saving", action="store_true",
+                        help="Skip quality evaluation (image rendering)")
     args = parser.parse_args()
 
     # --- Resolve frame range -------------------------------------------------
@@ -154,12 +156,12 @@ def main() -> None:
         sh_color_space=args.sh_color_space,
         rlgr_block_size=args.rlgr_block_size,
         device=args.device,
-        skip_save_ply=args.disable_image_and_ply_saving,
+        skip_save_ply=args.disable_ply_saving,
     )
 
     # --- Step 2: Evaluate Decompression Quality (direct call) ----------------
-    if args.disable_image_and_ply_saving:
-        print("[INFO] --disable_image_and_ply_saving: skipping quality evaluation.")
+    if args.disable_image_saving:
+        print("[INFO] --disable_image_saving: skipping quality evaluation.")
     else:
         print(f"\n{sep}\nStep 2: Evaluate Decompression Quality\n{sep}")
         eval_args = argparse.Namespace(
