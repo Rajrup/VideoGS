@@ -58,12 +58,13 @@ RLGR_BLOCK_SIZE = config.RLGR_BLOCK_SIZE
 DEVICE          = config.DEVICE
 
 STAGE2_GPUS = [0, 2, 3]
-STAGE2_WORKERS_PER_GPU = 2
+STAGE2_WORKERS_PER_GPU = 6
 STAGE2_ENABLE_IMAGE_SAVING = True
-STAGE2_ENABLE_PLY_SAVING = False
-RUN_EVALUATE = True
+STAGE2_ENABLE_PLY_SAVING = True
+RUN_EVALUATE = False
 SKIP_SAVED_EXPERIMENTS = True
 RUN_PLOT     = True
+RD_OUTPUT_SUBDIR = "livogs_rd"
 
 FRAME_IDS = [0, 50, 100, 150]
 EXPERIMENT_BETA_VALUES = [0.0]
@@ -143,7 +144,13 @@ def _remove_failed_experiment(
     SKIP_SAVED_EXPERIMENTS is True on the next run.
     """
     exp_dir = config.experiment_dir(
-        DATA_PATH, seq["dataset_name"], seq["sequence_name"], frame_id, depth, label,
+        DATA_PATH,
+        seq["dataset_name"],
+        seq["sequence_name"],
+        frame_id,
+        depth,
+        label,
+        rd_subdir_name=RD_OUTPUT_SUBDIR,
     )
     if os.path.isdir(exp_dir):
         shutil.rmtree(exp_dir, ignore_errors=True)
@@ -420,7 +427,13 @@ def _is_saved_experiment_complete(
     require_evaluation: bool,
 ) -> bool:
     exp_dir = config.experiment_dir(
-        DATA_PATH, seq["dataset_name"], seq["sequence_name"], frame_id, depth, label,
+        DATA_PATH,
+        seq["dataset_name"],
+        seq["sequence_name"],
+        frame_id,
+        depth,
+        label,
+        rd_subdir_name=RD_OUTPUT_SUBDIR,
     )
     if not os.path.isdir(exp_dir):
         return False
@@ -514,6 +527,7 @@ def stage_evaluate(seq: SequenceCfg, frame_id: int, depths: list[int]) -> list[s
                 "--data_path",       DATA_PATH,
                 "--dataset_name",    seq["dataset_name"],
                 "--sequence_name",   seq["sequence_name"],
+                "--rd_output_subdir", RD_OUTPUT_SUBDIR,
                 "--frame_id",        str(frame_id),
                 "--j",               str(depth),
                 "--sh_color_space",  SH_COLOR_SPACE,
@@ -655,7 +669,12 @@ def stage_aggregate(
     depths: list[int],
     plot_specs: Optional[list[dict[str, Any]]] = None,
 ) -> str:
-    output_root = config.rd_output_root(DATA_PATH, seq["dataset_name"], seq["sequence_name"])
+    output_root = config.rd_output_root(
+        DATA_PATH,
+        seq["dataset_name"],
+        seq["sequence_name"],
+        rd_subdir_name=RD_OUTPUT_SUBDIR,
+    )
     all_rows: list[dict[str, Any]] = []
 
     for depth in depths:
@@ -667,7 +686,13 @@ def stage_aggregate(
     all_rows = _filter_aggregate_rows_for_plots(all_rows, plot_specs)
     filtered_count = len(all_rows)
 
-    csv_path = config.all_results_csv(DATA_PATH, seq["dataset_name"], seq["sequence_name"], frame_id)
+    csv_path = config.all_results_csv(
+        DATA_PATH,
+        seq["dataset_name"],
+        seq["sequence_name"],
+        frame_id,
+        rd_subdir_name=RD_OUTPUT_SUBDIR,
+    )
     os.makedirs(os.path.dirname(csv_path), exist_ok=True)
 
     fieldnames = [
@@ -703,12 +728,23 @@ def stage_plot(
     seq: SequenceCfg, frame_id: int, plot_spec: dict[str, Any],
     psnr_range: Optional[tuple[float, float]] = None,
 ) -> None:
-    csv_path = config.all_results_csv(DATA_PATH, seq["dataset_name"], seq["sequence_name"], frame_id)
+    csv_path = config.all_results_csv(
+        DATA_PATH,
+        seq["dataset_name"],
+        seq["sequence_name"],
+        frame_id,
+        rd_subdir_name=RD_OUTPUT_SUBDIR,
+    )
     if not os.path.exists(csv_path):
         print(f"[WARN] No aggregated CSV found: {csv_path}")
         return
 
-    plot_dir = config.plot_output_dir(DATA_PATH, seq["dataset_name"], seq["sequence_name"])
+    plot_dir = config.plot_output_dir(
+        DATA_PATH,
+        seq["dataset_name"],
+        seq["sequence_name"],
+        rd_subdir_name=RD_OUTPUT_SUBDIR,
+    )
     curve_var = plot_spec["curve_var"]
     fixed = plot_spec["fixed"]
 

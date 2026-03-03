@@ -54,6 +54,7 @@ BASELINE_QUANTIZE_STEP: dict[str, float] = {
 
 # Default QP configs output root
 QP_CONFIGS_ROOT = os.path.join(VIDEOGS_ROOT, "results", "rd_qp_configs")
+RD_OUTPUT_SUBDIR = "livogs_rd"
 
 
 # ---------------------------------------------------------------------------
@@ -82,21 +83,27 @@ def processed_dataset_dir(data_path: str, dataset_name: str, sequence_name: str)
     return os.path.join(data_path, f"{dataset_name}_processed", sequence_name)
 
 
-def rd_output_root(data_path: str, dataset_name: str, sequence_name: str) -> str:
-    """``{data}/train_output/{dataset}/{sequence}/compression/livogs_rd/``"""
+def rd_output_root(
+    data_path: str,
+    dataset_name: str,
+    sequence_name: str,
+    rd_subdir_name: str = RD_OUTPUT_SUBDIR,
+) -> str:
+    """``{data}/train_output/{dataset}/{sequence}/compression/{rd_subdir_name}/``"""
     return os.path.join(
         data_path, "train_output", dataset_name, sequence_name,
-        "compression", "livogs_rd",
+        "compression", rd_subdir_name,
     )
 
 
 def experiment_dir(
     data_path: str, dataset_name: str, sequence_name: str,
     frame_id: int, depth: int, label: str,
+    rd_subdir_name: str = RD_OUTPUT_SUBDIR,
 ) -> str:
-    """``…/livogs_rd/frame_{id}/J_{depth}/{label}/``"""
+    """``…/{rd_subdir_name}/frame_{id}/J_{depth}/{label}/``"""
     return os.path.join(
-        rd_output_root(data_path, dataset_name, sequence_name),
+        rd_output_root(data_path, dataset_name, sequence_name, rd_subdir_name=rd_subdir_name),
         f"frame_{frame_id}", f"J_{depth}", label,
     )
 
@@ -113,9 +120,17 @@ def standard_output_dir(
     )
 
 
-def plot_output_dir(data_path: str, dataset_name: str, sequence_name: str) -> str:
-    """``…/livogs_rd/plots/``"""
-    return os.path.join(rd_output_root(data_path, dataset_name, sequence_name), "plots")
+def plot_output_dir(
+    data_path: str,
+    dataset_name: str,
+    sequence_name: str,
+    rd_subdir_name: str = RD_OUTPUT_SUBDIR,
+) -> str:
+    """``…/{rd_subdir_name}/plots/``"""
+    return os.path.join(
+        rd_output_root(data_path, dataset_name, sequence_name, rd_subdir_name=rd_subdir_name),
+        "plots",
+    )
 
 
 def qp_json_pattern(qp_configs_root: str, qp_dir_name: str, frame_id: int) -> str:
@@ -128,10 +143,16 @@ def qp_json_output_dir(qp_configs_root: str, qp_dir_name: str, frame_id: int) ->
     return os.path.join(qp_configs_root, qp_dir_name, f"frame_{frame_id}")
 
 
-def all_results_csv(data_path: str, dataset_name: str, sequence_name: str, frame_id: int) -> str:
-    """``…/livogs_rd/frame_{id}/all_results.csv``"""
+def all_results_csv(
+    data_path: str,
+    dataset_name: str,
+    sequence_name: str,
+    frame_id: int,
+    rd_subdir_name: str = RD_OUTPUT_SUBDIR,
+) -> str:
+    """``…/{rd_subdir_name}/frame_{id}/all_results.csv``"""
     return os.path.join(
-        rd_output_root(data_path, dataset_name, sequence_name),
+        rd_output_root(data_path, dataset_name, sequence_name, rd_subdir_name=rd_subdir_name),
         f"frame_{frame_id}", "all_results.csv",
     )
 
