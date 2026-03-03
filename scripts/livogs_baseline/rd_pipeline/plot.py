@@ -180,6 +180,25 @@ def _parse_fixed_pairs(fixed_pairs: list[str]) -> dict[str, float]:
     return fixed
 
 
+
+def _cross(o: tuple[float, float], a: tuple[float, float], b: tuple[float, float]) -> float:
+    """Cross product of vectors OA and OB."""
+    return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+
+def _upper_convex_hull(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Upper convex hull of 2D points (x=rate, y=quality), sorted by x."""
+    sorted_pts = sorted(set(points))
+    if len(sorted_pts) <= 1:
+        return list(sorted_pts)
+    upper: list[tuple[float, float]] = []
+    for p in sorted_pts:
+        while len(upper) >= 2 and _cross(upper[-2], upper[-1], p) >= 0:
+            upper.pop()
+        upper.append(p)
+    return upper
+
+
 def plot_rd(
     csv_path: str,
     curve_var: str,
@@ -188,6 +207,7 @@ def plot_rd(
     sequence_name: str,
     frame_id: int,
     psnr_range: Optional[tuple[float, float]] = None,
+    curve_values: Optional[list[float]] = None,
 ) -> None:
     """Plot generic RD curves from a single aggregated CSV."""
     if not os.path.exists(csv_path):
@@ -216,9 +236,17 @@ def plot_rd(
             if row_value is None:
                 keep = False
                 break
-            if round(float(row_value), 6) != round(float(target_value), 6):
-                keep = False
-                break
+            if isinstance(target_value, (list, tuple)):
+                if not any(
+                    round(float(row_value), 6) == round(float(tv), 6)
+                    for tv in target_value
+                ):
+                    keep = False
+                    break
+            else:
+                if round(float(row_value), 6) != round(float(target_value), 6):
+                    keep = False
+                    break
         if keep:
             filtered.append(row)
 
@@ -237,7 +265,19 @@ def plot_rd(
         print(f"[WARN] No rows contain curve variable '{curve_var}' after filtering.")
         return
 
+    # Filter to selected curve_values if specified
+    if curve_values is not None:
+        allowed = {round(float(v), 6) for v in curve_values}
+        grouped = {
+            k: v for k, v in grouped.items()
+            if round(k, 6) in allowed
+        }
+        if not grouped:
+            print(f"[WARN] No rows match curve_values={curve_values} for '{curve_var}'.")
+            return
+
     fig, ax = plt.subplots(figsize=(9, 6))
+    all_points: list[tuple[float, float]] = []  # for convex hull
     for curve_value in sorted(grouped.keys()):
         curve_rows = grouped[curve_value]
         valid_rows = [
@@ -249,7 +289,17 @@ def plot_rd(
         valid_rows.sort(key=lambda r: float(r["compressed_mb"]))
         x = [float(r["compressed_mb"]) for r in valid_rows]
         y = [float(r["decomp_psnr"]) for r in valid_rows]
-        ax.plot(x, y, marker="o", linewidth=1.6, label=f"{curve_var}={curve_value:g}")
+        all_points.extend(zip(x, y))
+        ax.plot(x, y, marker="o", markersize=3, linewidth=0.8, linestyle="--", label=f"{curve_var}={curve_value:g}")
+
+    # Convex hull across all operating points
+    if len(all_points) >= 2:
+        hull_pts = _upper_convex_hull(all_points)
+        if len(hull_pts) >= 2:
+            hx = [p[0] for p in hull_pts]
+            hy = [p[1] for p in hull_pts]
+            ax.plot(hx, hy, color="red", linewidth=2.5, linestyle="-",
+                    label="Convex hull", zorder=0)
 
     gt_psnr = next((r.get("gt_psnr") for r in filtered if r.get("gt_psnr") is not None), None)
     if gt_psnr is not None:
