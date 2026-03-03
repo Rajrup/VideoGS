@@ -179,19 +179,18 @@ if __name__ == "__main__":
     parser.add_argument("--sh_color_space", type=str, default="rgb",
                         choices=["rgb", "yuv", "klt"],
                         help="Color space for SH coefficients (default: rgb)")
-    parser.add_argument("--color_rescale", action="store_true", default=True,
-                        help="Rescale SH to [0, 255] before color transform (default: True)")
-    parser.add_argument("--no_color_rescale", action="store_true",
-                        help="Disable SH color rescaling")
     parser.add_argument("--rlgr_block_size", type=int, default=4096,
                         help="RLGR parallel block size (default: 4096)")
     parser.add_argument("--quantize_config_json", type=str, default=None,
                         help="Path to JSON file with full quantize_config dict (overrides all --quantize_step_* args)")
+    parser.add_argument("--nvcomp_algorithm", type=str, default="ANS",
+                        choices=["None", "LZ4", "Snappy", "GDeflate", "Deflate",
+                                 "zStandard", "Cascaded", "Bitcomp", "ANS"],
+                        help="nvCOMP algorithm for octree position compression (default: ANS, 'None' to disable)")
     parser.add_argument("--device", type=str, default="cuda:0")
     args = parser.parse_args()
 
-    if args.no_color_rescale:
-        args.color_rescale = False
+    nvcomp_algorithm = None if args.nvcomp_algorithm == "None" else args.nvcomp_algorithm
 
     # Build quantize_step dict — overridden entirely if --quantize_config_json is provided
     if args.quantize_config_json is not None:
@@ -233,8 +232,8 @@ if __name__ == "__main__":
     print(f"  Quantize steps:     quats={quantize_step['quats']}, scales={quantize_step['scales']}, "
           f"opacity={quantize_step['opacity']}, sh_dc={quantize_step['sh_dc']}, sh_rest={quantize_step['sh_rest']}")
     print(f"  SH color space:     {args.sh_color_space}")
-    print(f"  Color rescale:      {args.color_rescale}")
     print(f"  RLGR block size:    {args.rlgr_block_size}")
+    print(f"  nvCOMP algorithm:   {nvcomp_algorithm if nvcomp_algorithm else 'none'}")
     print("=" * 70)
 
     # Warmup GPU
@@ -253,9 +252,9 @@ if __name__ == "__main__":
     compressed_state = encode_livogs(
         params, J=args.J, device=device, device_id=device_id,
         sh_color_space=args.sh_color_space,
-        color_rescale=args.color_rescale,
         quantize_step=quantize_step,
         rlgr_block_size=args.rlgr_block_size,
+        nvcomp_algorithm=nvcomp_algorithm,
     )
     torch.cuda.synchronize(device_id)
 
@@ -286,9 +285,9 @@ if __name__ == "__main__":
         compressed_state = encode_livogs(
             params, J=args.J, device=device, device_id=device_id,
             sh_color_space=args.sh_color_space,
-            color_rescale=args.color_rescale,
             quantize_step=quantize_step,
             rlgr_block_size=args.rlgr_block_size,
+            nvcomp_algorithm=nvcomp_algorithm,
         )
 
         torch.cuda.synchronize(device_id)
@@ -377,12 +376,12 @@ if __name__ == "__main__":
             "J": args.J,
             "quantize_step": quantize_step,
             "sh_color_space": args.sh_color_space,
-            "color_rescale": args.color_rescale,
             "rlgr_block_size": args.rlgr_block_size,
             "sh_degree": args.sh_degree,
             "frame_start": args.frame_start,
             "frame_end": args.frame_end,
             "interval": args.interval,
+            "nvcomp_algorithm": nvcomp_algorithm,
         }
         with open(os.path.join(args.output_folder, "livogs_config.json"), "w") as f:
             json.dump(config, f, indent=4)

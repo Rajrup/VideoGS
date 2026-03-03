@@ -11,6 +11,7 @@
 #   --frame_start      Start frame            (default: 0)
 #   --frame_end        End frame              (default: 200)
 #   --interval         Frame interval         (default: 1)
+#   --nvcomp           nvCOMP algorithm       (default: ANS, 'None' to disable)
 
 DATASET_NAME="HiFi4G_Dataset"
 SEQUENCE_NAME="4K_Actor1_Greeting"
@@ -26,6 +27,7 @@ J=15                    # Octree depth for voxelization
 QUANTIZE_STEP=0.0001      # Uniform quantization step
 SH_COLOR_SPACE="klt"    # Color space: rgb, yuv, klt
 RLGR_BLOCK_SIZE=4096    # RLGR parallel block size
+NVCOMP_ALGORITHM="None"  # nvCOMP algorithm for position compression (None to disable)
 
 # --- Parse named arguments ---
 while [[ $# -gt 0 ]]; do
@@ -38,6 +40,7 @@ while [[ $# -gt 0 ]]; do
         --frame_start)    START_FRAME="$2";    shift 2 ;;
         --frame_end)      END_FRAME="$2";      shift 2 ;;
         --interval)       INTERVAL="$2";       shift 2 ;;
+        --nvcomp)         NVCOMP_ALGORITHM="$2"; shift 2 ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
@@ -45,7 +48,7 @@ done
 data_path="/synology/rajrup/VideoGS"
 dataset_path="${data_path}/${DATASET_NAME}_processed/${SEQUENCE_NAME}"
 gt_model_path="${data_path}/train_output/${DATASET_NAME}/${SEQUENCE_NAME}/checkpoint"
-output_folder="${data_path}/train_output/${DATASET_NAME}/${SEQUENCE_NAME}/compression/livogs/J_${J}_qstep_${QUANTIZE_STEP}_${SH_COLOR_SPACE}"
+output_folder="${data_path}/train_output/${DATASET_NAME}/${SEQUENCE_NAME}/compression/livogs/J_${J}_qstep_${QUANTIZE_STEP}_${SH_COLOR_SPACE}_nvcomp_${NVCOMP_ALGORITHM}"
 
 ### 1. LiVoGS Compress + Decompress (encode → bytestream on GPU → decode → save PLY)
 echo "======================================================================"
@@ -60,7 +63,8 @@ python scripts/livogs_baseline/compress_decompress_pipeline.py \
     --J ${J} \
     --quantize_step ${QUANTIZE_STEP} \
     --sh_color_space ${SH_COLOR_SPACE} \
-    --rlgr_block_size ${RLGR_BLOCK_SIZE}
+    --rlgr_block_size ${RLGR_BLOCK_SIZE} \
+    --nvcomp_algorithm ${NVCOMP_ALGORITHM}
 
 ### 2. Evaluate Decompression Quality (PSNR/SSIM vs GT)
 echo ""
