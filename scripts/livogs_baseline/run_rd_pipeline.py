@@ -52,25 +52,22 @@ RESOLUTION      = config.RESOLUTION
 SH_DEGREE       = config.SH_DEGREE
 SH_COLOR_SPACE  = config.SH_COLOR_SPACE
 RLGR_BLOCK_SIZE = config.RLGR_BLOCK_SIZE
+NVCOMP_ALGORITHM = "ANS"
 
 STAGE2_GPUS = [0, 2, 3]
 STAGE2_WORKERS_PER_GPU = 6
 STAGE2_ENABLE_IMAGE_SAVING = True
 STAGE2_ENABLE_PLY_SAVING = True
-
 SKIP_SAVED_EXPERIMENTS = True
-RD_OUTPUT_SUBDIR = "livogs_rd"
+RD_OUTPUT_SUBDIR = "livogs_rd_nvcomp"
+
 FRAME_IDS = [0, 50, 100, 150]
 EXPERIMENT_BETA_VALUES = [0.0]
 EXPERIMENT_SH_QPS = [v / 255.0 for v in [1, 2, 4, 8, 16, 32, 64, 128]]
-
 EXPERIMENT_DEPTHS = [12, 11, 10, 9, 8]
-
 EXPERIMENT_QP_QUATS: list[float] = [0.0001, 0.001, 0.005, 0.01, 0.03, 0.05]
 EXPERIMENT_QP_SCALES: list[float] = [0.0001, 0.001, 0.002]
 EXPERIMENT_QP_OPACITY: list[float] = [0.0001, 0.01, 0.1, 0.5, 1]
-
-
 
 QP_CONFIGS_ROOT = config.QP_CONFIGS_ROOT
 
@@ -78,7 +75,6 @@ QP_CONFIGS_ROOT = config.QP_CONFIGS_ROOT
 # ---------------------------------------------------------------------------
 # Stage-2 job type
 # ---------------------------------------------------------------------------
-
 class Stage2Job:
     __slots__ = ("idx", "label", "depth", "gpu_id", "cmd", "env")
 
@@ -499,6 +495,8 @@ def stage_evaluate(seq: SequenceCfg, frame_id: int, depths: list[int]) -> list[s
                 "--sh_degree",       str(SH_DEGREE),
                 "--qp_config_json",  json_path,
                 "--device",          "cuda:0",
+                "--nvcomp_algorithm",
+                str(NVCOMP_ALGORITHM) if NVCOMP_ALGORITHM is not None else "None",
             ]
             if not STAGE2_ENABLE_PLY_SAVING:
                 cmd.append("--disable_ply_saving")
@@ -582,6 +580,7 @@ def main() -> None:
         f"  Attr QPs:  quats={EXPERIMENT_QP_QUATS}  scales={EXPERIMENT_QP_SCALES} "
         f"opacity={EXPERIMENT_QP_OPACITY}"
     )
+    print(f"  nvCOMP:     {NVCOMP_ALGORITHM if NVCOMP_ALGORITHM else 'none'}")
     print(sep)
 
     if not ensure_experiment_configs():

@@ -71,12 +71,17 @@ def main() -> None:
                         help="Skip saving decompressed PLY files")
     parser.add_argument("--disable_image_saving", action="store_true",
                         help="Skip quality evaluation (image rendering)")
+    parser.add_argument("--nvcomp_algorithm", type=str, default=config.NVCOMP_ALGORITHM,
+                        help="nvCOMP lossless compression algorithm for positions "
+                             "(e.g. ANS, LZ4, Snappy, None to disable)")
     args = parser.parse_args()
 
     # --- Resolve frame range -------------------------------------------------
     if args.frame_id is not None:
         args.frame_start = args.frame_id
         args.frame_end   = args.frame_id + 1
+
+    nvcomp_algorithm = None if args.nvcomp_algorithm == "None" else args.nvcomp_algorithm
 
     # --- Resolve QP config and output paths ----------------------------------
     qp_label = None
@@ -160,6 +165,7 @@ def main() -> None:
         rlgr_block_size=args.rlgr_block_size,
         device=args.device,
         skip_save_ply=args.disable_ply_saving,
+        nvcomp_algorithm=nvcomp_algorithm,
     )
 
     # --- Step 2: Evaluate Decompression Quality (direct call) ----------------

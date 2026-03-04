@@ -42,6 +42,7 @@ RESOLUTION      = 2
 SH_DEGREE       = 3
 SH_COLOR_SPACE  = "klt"
 RLGR_BLOCK_SIZE = 4096
+NVCOMP_ALGORITHM: str | None = None
 J               = 15          # octree depth for voxelization
 DEVICE          = "cuda:0"
 
