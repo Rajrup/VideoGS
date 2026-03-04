@@ -41,11 +41,36 @@ SEQUENCES: list[SequenceCfg] = [
         "sequence_name": "4K_Actor1_Greeting",
         "qp_dir_name":   "HiFi4G_4K_Actor1_Greeting",
     },
-    # {
-    #     "dataset_name":  "HiFi4G_Dataset",
-    #     "sequence_name": "4K_Actor3_Violin",
-    #     "qp_dir_name":   "HiFi4G_4K_Actor3_Violin",
-    # },
+    {
+        "dataset_name":  "HiFi4G_Dataset",
+        "sequence_name": "4K_Actor2_Dancing",
+        "qp_dir_name":   "HiFi4G_4K_Actor2_Dancing",
+    },
+    {
+        "dataset_name":  "HiFi4G_Dataset",
+        "sequence_name": "4K_Actor3_Violin",
+        "qp_dir_name":   "HiFi4G_4K_Actor3_Violin",
+    },
+    {
+        "dataset_name":  "HiFi4G_Dataset",
+        "sequence_name": "4K_Actor4_Dancing",
+        "qp_dir_name":   "HiFi4G_4K_Actor4_Dancing",
+    },
+    {
+        "dataset_name":  "HiFi4G_Dataset",
+        "sequence_name": "4K_Actor5_Oil-paper_Umbrella",
+        "qp_dir_name":   "HiFi4G_4K_Actor5_Oil-paper_Umbrella",
+    },
+    {
+        "dataset_name":  "HiFi4G_Dataset",
+        "sequence_name": "4K_Actor6_Changing_Clothes",
+        "qp_dir_name":   "HiFi4G_4K_Actor6_Changing_Clothes",
+    },
+    {
+        "dataset_name":  "HiFi4G_Dataset",
+        "sequence_name": "4K_Actor7_Nunchaku",
+        "qp_dir_name":   "HiFi4G_4K_Actor7_Nunchaku",
+    },
 ]
 
 RESOLUTION      = config.RESOLUTION
@@ -58,7 +83,7 @@ STAGE2_GPUS = [0, 1]
 STAGE2_WORKERS_PER_GPU = 16
 STAGE2_ENABLE_IMAGE_SAVING = True
 STAGE2_ENABLE_PLY_SAVING = True
-SKIP_SAVED_EXPERIMENTS = True
+SKIP_SAVED_EXPERIMENTS = False
 RD_OUTPUT_SUBDIR = "livogs_rd_nvcomp"
 
 FRAME_IDS = [0]

@@ -145,6 +145,24 @@ def save_videogs_ply(
         f.write(data.tobytes())
 
 
+
+def _per_channel_column_names(n_channels: int) -> list[str]:
+    """Generate CSV column names for per-dimension compressed bytes.
+
+    Channel layout: quats(0:4), scales(4:7), opacity(7), sh(8:).
+    """
+    names: list[str] = []
+    for i in range(4):
+        names.append(f"quats_dim{i}_compressed_bytes")
+    for i in range(3):
+        names.append(f"scales_dim{i}_compressed_bytes")
+    names.append("opacity_dim0_compressed_bytes")
+    num_sh = n_channels - 8
+    for i in range(num_sh):
+        names.append(f"sh_dim{i}_compressed_bytes")
+    assert len(names) == n_channels
+    return names
+
 # ---------------------------------------------------------------------------
 # Main compress + decompress pipeline
 # ---------------------------------------------------------------------------
@@ -257,11 +275,7 @@ def compress_decompress(
         compressed_size_bytes = compressed_state["total_compressed_bytes"]
         position_compressed_bytes = compressed_state["position_compressed_bytes"]
         attribute_compressed_bytes = compressed_state["attribute_compressed_bytes"]
-        quats_compressed_bytes = compressed_state["quats_compressed_bytes"]
-        scales_compressed_bytes = compressed_state["scales_compressed_bytes"]
-        opacity_compressed_bytes = compressed_state["opacity_compressed_bytes"]
-        sh_dc_compressed_bytes = compressed_state["sh_dc_compressed_bytes"]
-        sh_rest_compressed_bytes = compressed_state["sh_rest_compressed_bytes"]
+        per_channel_compressed_bytes = compressed_state["per_channel_compressed_bytes"]
 
         # Decode (timed)
         t_dec_start = time.perf_counter()
@@ -287,11 +301,7 @@ def compress_decompress(
             "compressed_size_bytes": compressed_size_bytes,
             "position_compressed_bytes": position_compressed_bytes,
             "attribute_compressed_bytes": attribute_compressed_bytes,
-            "quats_compressed_bytes": quats_compressed_bytes,
-            "scales_compressed_bytes": scales_compressed_bytes,
-            "opacity_compressed_bytes": opacity_compressed_bytes,
-            "sh_dc_compressed_bytes": sh_dc_compressed_bytes,
-            "sh_rest_compressed_bytes": sh_rest_compressed_bytes,
+            "per_channel_compressed_bytes": per_channel_compressed_bytes,
         })
 
         tqdm.write(
@@ -310,14 +320,13 @@ def compress_decompress(
         csv_path = os.path.join(output_folder, "benchmark_livogs.csv")
         with open(csv_path, "w", newline="") as f:
             w = csv.writer(f)
+            per_ch_cols = _per_channel_column_names(len(benchmark_rows[0]["per_channel_compressed_bytes"]))
             w.writerow([
                 "frame_id", "encode_time_ms", "decode_time_ms",
                 "original_points", "voxelized_points",
                 "uncompressed_size_bytes", "compressed_size_bytes",
                 "position_compressed_bytes", "attribute_compressed_bytes",
-                "quats_compressed_bytes", "scales_compressed_bytes",
-                "opacity_compressed_bytes", "sh_dc_compressed_bytes",
-                "sh_rest_compressed_bytes",
+                *per_ch_cols,
             ])
             for r in benchmark_rows:
                 w.writerow([
@@ -325,9 +334,7 @@ def compress_decompress(
                     r["original_points"], r["voxelized_points"],
                     r["uncompressed_size_bytes"], r["compressed_size_bytes"],
                     r["position_compressed_bytes"], r["attribute_compressed_bytes"],
-                    r["quats_compressed_bytes"], r["scales_compressed_bytes"],
-                    r["opacity_compressed_bytes"], r["sh_dc_compressed_bytes"],
-                    r["sh_rest_compressed_bytes"],
+                    *r["per_channel_compressed_bytes"],
                 ])
 
         # Save config JSON for reproducibility
@@ -352,11 +359,12 @@ def compress_decompress(
         total_comp    = sum(r["compressed_size_bytes"] for r in benchmark_rows)
         total_pos     = sum(r["position_compressed_bytes"] for r in benchmark_rows)
         total_attr    = sum(r["attribute_compressed_bytes"] for r in benchmark_rows)
-        total_quats   = sum(r["quats_compressed_bytes"] for r in benchmark_rows)
-        total_scales  = sum(r["scales_compressed_bytes"] for r in benchmark_rows)
-        total_opacity = sum(r["opacity_compressed_bytes"] for r in benchmark_rows)
-        total_sh_dc   = sum(r["sh_dc_compressed_bytes"] for r in benchmark_rows)
-        total_sh_rest = sum(r["sh_rest_compressed_bytes"] for r in benchmark_rows)
+        per_ch = [r["per_channel_compressed_bytes"] for r in benchmark_rows]
+        total_quats   = sum(sum(ch[0:4]) for ch in per_ch)
+        total_scales  = sum(sum(ch[4:7]) for ch in per_ch)
+        total_opacity = sum(ch[7] for ch in per_ch)
+        total_sh_dc   = sum(sum(ch[8:11]) for ch in per_ch)
+        total_sh_rest = sum(sum(ch[11:]) for ch in per_ch)
         total_orig    = sum(r["original_points"] for r in benchmark_rows)
         total_vox     = sum(r["voxelized_points"] for r in benchmark_rows)
 

@@ -15,7 +15,7 @@ from rd_pipeline.plot import plot_rd_scatter
 
 RD_OUTPUT_ROOTS: list[dict[str, Any]] = [
     {
-        "path": "/synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor1_Greeting/compression/livogs_rd",
+        "path": "/synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor1_Greeting/compression/livogs_rd_nvcomp",
         "frame_ids": [0],
     },
     # {
