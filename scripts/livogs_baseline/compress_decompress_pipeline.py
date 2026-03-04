@@ -300,6 +300,11 @@ if __name__ == "__main__":
         compressed_size_bytes = compressed_state['total_compressed_bytes']
         position_compressed_bytes = compressed_state['position_compressed_bytes']
         attribute_compressed_bytes = compressed_state['attribute_compressed_bytes']
+        quats_compressed_bytes = compressed_state['quats_compressed_bytes']
+        scales_compressed_bytes = compressed_state['scales_compressed_bytes']
+        opacity_compressed_bytes = compressed_state['opacity_compressed_bytes']
+        sh_dc_compressed_bytes = compressed_state['sh_dc_compressed_bytes']
+        sh_rest_compressed_bytes = compressed_state['sh_rest_compressed_bytes']
 
         # --- 3. Decode (timed) ---
         t_dec_start = time.perf_counter()
@@ -326,6 +331,11 @@ if __name__ == "__main__":
             "compressed_size_bytes": compressed_size_bytes,
             "position_compressed_bytes": position_compressed_bytes,
             "attribute_compressed_bytes": attribute_compressed_bytes,
+            "quats_compressed_bytes": quats_compressed_bytes,
+            "scales_compressed_bytes": scales_compressed_bytes,
+            "opacity_compressed_bytes": opacity_compressed_bytes,
+            "sh_dc_compressed_bytes": sh_dc_compressed_bytes,
+            "sh_rest_compressed_bytes": sh_rest_compressed_bytes,
         })
 
         tqdm.write(
@@ -348,7 +358,10 @@ if __name__ == "__main__":
             w.writerow(["frame_id", "encode_time_ms", "decode_time_ms",
                          "original_points", "voxelized_points", 
                          "uncompressed_size_bytes", "compressed_size_bytes",
-                         "position_compressed_bytes", "attribute_compressed_bytes"])
+                         "position_compressed_bytes", "attribute_compressed_bytes",
+                         "quats_compressed_bytes", "scales_compressed_bytes",
+                         "opacity_compressed_bytes", "sh_dc_compressed_bytes",
+                         "sh_rest_compressed_bytes"])
             for r in benchmark_rows:
                 w.writerow([
                     r["frame"],
@@ -360,6 +373,11 @@ if __name__ == "__main__":
                     r["compressed_size_bytes"],
                     r["position_compressed_bytes"],
                     r["attribute_compressed_bytes"],
+                    r["quats_compressed_bytes"],
+                    r["scales_compressed_bytes"],
+                    r["opacity_compressed_bytes"],
+                    r["sh_dc_compressed_bytes"],
+                    r["sh_rest_compressed_bytes"],
                 ])
 
         n = len(benchmark_rows)
@@ -369,9 +387,13 @@ if __name__ == "__main__":
         total_comp = sum(r["compressed_size_bytes"] for r in benchmark_rows)
         total_position_comp = sum(r["position_compressed_bytes"] for r in benchmark_rows)
         total_attribute_comp = sum(r["attribute_compressed_bytes"] for r in benchmark_rows)
+        total_quats = sum(r["quats_compressed_bytes"] for r in benchmark_rows)
+        total_scales = sum(r["scales_compressed_bytes"] for r in benchmark_rows)
+        total_opacity = sum(r["opacity_compressed_bytes"] for r in benchmark_rows)
+        total_sh_dc = sum(r["sh_dc_compressed_bytes"] for r in benchmark_rows)
+        total_sh_rest = sum(r["sh_rest_compressed_bytes"] for r in benchmark_rows)
         total_orig_points = sum(r["original_points"] for r in benchmark_rows)
         total_vox_points = sum(r["voxelized_points"] for r in benchmark_rows)
-
         # Save config JSON for reproducibility
         import json
         config = {
@@ -398,8 +420,13 @@ if __name__ == "__main__":
         print(f"  Total compressed size:     {total_comp / 1024 / 1024:.2f} MB  (avg {total_comp / n / 1024 / 1024:.2f} MB/frame)")
         print(f"  Total position compressed size: {total_position_comp / 1024 / 1024:.2f} MB  (avg {total_position_comp / n / 1024 / 1024:.2f} MB/frame)")
         print(f"  Total attribute compressed size: {total_attribute_comp / 1024 / 1024:.2f} MB  (avg {total_attribute_comp / n / 1024 / 1024:.2f} MB/frame)")
+        print(f"    - quats:   {total_quats / 1024 / 1024:.2f} MB  (avg {total_quats / n / 1024 / 1024:.2f} MB/frame)")
+        print(f"    - scales:  {total_scales / 1024 / 1024:.2f} MB  (avg {total_scales / n / 1024 / 1024:.2f} MB/frame)")
+        print(f"    - opacity: {total_opacity / 1024 / 1024:.2f} MB  (avg {total_opacity / n / 1024 / 1024:.2f} MB/frame)")
+        print(f"    - sh_dc:   {total_sh_dc / 1024 / 1024:.2f} MB  (avg {total_sh_dc / n / 1024 / 1024:.2f} MB/frame)")
+        print(f"    - sh_rest: {total_sh_rest / 1024 / 1024:.2f} MB  (avg {total_sh_rest / n / 1024 / 1024:.2f} MB/frame)")
         print(f"  Compression ratio:         {total_uncomp / total_comp:.2f}x")
-        print(f"  Avg point reduction:       {total_orig_points / n:.0f} → {total_vox_points / n:.0f} "
+        print(f"  Avg point reduction:       {total_orig_points / n:.0f} \u2192 {total_vox_points / n:.0f} "
               f"({total_orig_points / total_vox_points:.2f}x)")
         print(f"  CSV: {csv_path}")
         print("=" * 70)

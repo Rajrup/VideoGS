@@ -257,6 +257,11 @@ def compress_decompress(
         compressed_size_bytes = compressed_state["total_compressed_bytes"]
         position_compressed_bytes = compressed_state["position_compressed_bytes"]
         attribute_compressed_bytes = compressed_state["attribute_compressed_bytes"]
+        quats_compressed_bytes = compressed_state["quats_compressed_bytes"]
+        scales_compressed_bytes = compressed_state["scales_compressed_bytes"]
+        opacity_compressed_bytes = compressed_state["opacity_compressed_bytes"]
+        sh_dc_compressed_bytes = compressed_state["sh_dc_compressed_bytes"]
+        sh_rest_compressed_bytes = compressed_state["sh_rest_compressed_bytes"]
 
         # Decode (timed)
         t_dec_start = time.perf_counter()
@@ -282,6 +287,11 @@ def compress_decompress(
             "compressed_size_bytes": compressed_size_bytes,
             "position_compressed_bytes": position_compressed_bytes,
             "attribute_compressed_bytes": attribute_compressed_bytes,
+            "quats_compressed_bytes": quats_compressed_bytes,
+            "scales_compressed_bytes": scales_compressed_bytes,
+            "opacity_compressed_bytes": opacity_compressed_bytes,
+            "sh_dc_compressed_bytes": sh_dc_compressed_bytes,
+            "sh_rest_compressed_bytes": sh_rest_compressed_bytes,
         })
 
         tqdm.write(
@@ -305,6 +315,9 @@ def compress_decompress(
                 "original_points", "voxelized_points",
                 "uncompressed_size_bytes", "compressed_size_bytes",
                 "position_compressed_bytes", "attribute_compressed_bytes",
+                "quats_compressed_bytes", "scales_compressed_bytes",
+                "opacity_compressed_bytes", "sh_dc_compressed_bytes",
+                "sh_rest_compressed_bytes",
             ])
             for r in benchmark_rows:
                 w.writerow([
@@ -312,6 +325,9 @@ def compress_decompress(
                     r["original_points"], r["voxelized_points"],
                     r["uncompressed_size_bytes"], r["compressed_size_bytes"],
                     r["position_compressed_bytes"], r["attribute_compressed_bytes"],
+                    r["quats_compressed_bytes"], r["scales_compressed_bytes"],
+                    r["opacity_compressed_bytes"], r["sh_dc_compressed_bytes"],
+                    r["sh_rest_compressed_bytes"],
                 ])
 
         # Save config JSON for reproducibility
@@ -336,6 +352,11 @@ def compress_decompress(
         total_comp    = sum(r["compressed_size_bytes"] for r in benchmark_rows)
         total_pos     = sum(r["position_compressed_bytes"] for r in benchmark_rows)
         total_attr    = sum(r["attribute_compressed_bytes"] for r in benchmark_rows)
+        total_quats   = sum(r["quats_compressed_bytes"] for r in benchmark_rows)
+        total_scales  = sum(r["scales_compressed_bytes"] for r in benchmark_rows)
+        total_opacity = sum(r["opacity_compressed_bytes"] for r in benchmark_rows)
+        total_sh_dc   = sum(r["sh_dc_compressed_bytes"] for r in benchmark_rows)
+        total_sh_rest = sum(r["sh_rest_compressed_bytes"] for r in benchmark_rows)
         total_orig    = sum(r["original_points"] for r in benchmark_rows)
         total_vox     = sum(r["voxelized_points"] for r in benchmark_rows)
 
@@ -349,8 +370,13 @@ def compress_decompress(
         print(f"  Total compressed size:     {total_comp / 1024 / 1024:.2f} MB  (avg {total_comp / n / 1024 / 1024:.2f} MB/frame)")
         print(f"  Total position compressed: {total_pos / 1024 / 1024:.2f} MB  (avg {total_pos / n / 1024 / 1024:.2f} MB/frame)")
         print(f"  Total attribute compressed: {total_attr / 1024 / 1024:.2f} MB  (avg {total_attr / n / 1024 / 1024:.2f} MB/frame)")
+        print(f"    - quats:   {total_quats / 1024 / 1024:.2f} MB  (avg {total_quats / n / 1024 / 1024:.2f} MB/frame)")
+        print(f"    - scales:  {total_scales / 1024 / 1024:.2f} MB  (avg {total_scales / n / 1024 / 1024:.2f} MB/frame)")
+        print(f"    - opacity: {total_opacity / 1024 / 1024:.2f} MB  (avg {total_opacity / n / 1024 / 1024:.2f} MB/frame)")
+        print(f"    - sh_dc:   {total_sh_dc / 1024 / 1024:.2f} MB  (avg {total_sh_dc / n / 1024 / 1024:.2f} MB/frame)")
+        print(f"    - sh_rest: {total_sh_rest / 1024 / 1024:.2f} MB  (avg {total_sh_rest / n / 1024 / 1024:.2f} MB/frame)")
         print(f"  Compression ratio:         {total_uncomp / total_comp:.2f}x")
-        print(f"  Avg point reduction:       {total_orig / n:.0f} → {total_vox / n:.0f} "
+        print(f"  Avg point reduction:       {total_orig / n:.0f} \u2192 {total_vox / n:.0f} "
               f"({total_orig / total_vox:.2f}x)")
         print(f"  CSV: {csv_path}")
         print("=" * 70)

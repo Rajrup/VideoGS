@@ -79,6 +79,12 @@ CSV_COLUMNS = [
     "ssim_drop",
     "size_bytes",
     "compressed_mb",
+    "position_compressed_bytes",
+    "quats_compressed_bytes",
+    "scales_compressed_bytes",
+    "opacity_compressed_bytes",
+    "sh_dc_compressed_bytes",
+    "sh_rest_compressed_bytes",
     "label",
 ]
 
@@ -160,11 +166,23 @@ def load_experiment(
 
     # --- Benchmark (compressed size) ---
     compressed_bytes: Optional[int] = None
+    position_compressed_bytes: int = 0
+    quats_compressed_bytes: int = 0
+    scales_compressed_bytes: int = 0
+    opacity_compressed_bytes: int = 0
+    sh_dc_compressed_bytes: int = 0
+    sh_rest_compressed_bytes: int = 0
     try:
         with open(benchmark_path, newline="", encoding="utf-8") as f:
             for row in csv.DictReader(f):
                 if _frame_id_matches(row["frame_id"], frame_id):
                     compressed_bytes = int(row["compressed_size_bytes"])
+                    position_compressed_bytes = int(row.get("position_compressed_bytes", 0))
+                    quats_compressed_bytes = int(row.get("quats_compressed_bytes", 0))
+                    scales_compressed_bytes = int(row.get("scales_compressed_bytes", 0))
+                    opacity_compressed_bytes = int(row.get("opacity_compressed_bytes", 0))
+                    sh_dc_compressed_bytes = int(row.get("sh_dc_compressed_bytes", 0))
+                    sh_rest_compressed_bytes = int(row.get("sh_rest_compressed_bytes", 0))
                     break
     except (OSError, KeyError, ValueError):
         return None
@@ -220,6 +238,12 @@ def load_experiment(
         "ssim_drop": gt_ssim - decomp_ssim,
         "size_bytes": compressed_bytes,
         "compressed_mb": compressed_bytes / (1024 * 1024),
+        "position_compressed_bytes": position_compressed_bytes,
+        "quats_compressed_bytes": quats_compressed_bytes,
+        "scales_compressed_bytes": scales_compressed_bytes,
+        "opacity_compressed_bytes": opacity_compressed_bytes,
+        "sh_dc_compressed_bytes": sh_dc_compressed_bytes,
+        "sh_rest_compressed_bytes": sh_rest_compressed_bytes,
         "label": label,
     }
 
