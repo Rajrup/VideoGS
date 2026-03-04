@@ -57,9 +57,9 @@ python scripts/livogs_baseline/collect_rd_results.py
 
 **CSV columns:**
 
-`sequence_name`, `frame_id`, `depth`, `sh_qp`, `beta`, `qp_opacity`, `qp_scales`, `qp_quats`, `gt_psnr`, `gt_ssim`, `decomp_psnr`, `decomp_ssim`, `psnr_drop`, `ssim_drop`, `size_bytes`, `compressed_mb`, `label`
+`sequence_name`, `frame_id`, `depth`, `qp_sh`, `beta`, `qp_opacity`, `qp_scales`, `qp_quats`, `gt_psnr`, `gt_ssim`, `decomp_psnr`, `decomp_ssim`, `psnr_drop`, `ssim_drop`, `size_bytes`, `compressed_mb`, `label`
 
-**Cross-project support:** Works with both VideoGS (`sh_qp` in QP configs) and Queen (`baseline_qp`) directory layouts.
+**Cross-project support:** Works with both VideoGS (`qp_sh` in QP configs) and Queen (`qp_sh`) directory layouts.
 
 ### 3. `plot_rd_results.py` — Collect + plot RD curves
 
@@ -95,7 +95,7 @@ python scripts/livogs_baseline/plot_rd_results.py
 ]
 ```
 
-- `curve_var` — the knob to sweep (becomes separate RD curves). Valid: `depth`, `sh_qp`, `beta`, `qp_quats`, `qp_scales`, `qp_opacity`
+- `curve_var` — the knob to sweep (becomes separate RD curves). Valid: `depth`, `qp_sh`, `beta`, `qp_quats`, `qp_scales`, `qp_opacity`
 - `fixed` — exact-match filters applied before plotting
 - `psnr_range` — optional `[min, max]` for y-axis
 

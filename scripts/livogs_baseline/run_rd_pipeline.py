@@ -144,13 +144,13 @@ ConfigKey = tuple[float, float, float, float, float]
 
 
 def _expected_config_keys(
-    sh_qps: list[float],
+    qp_sh_values: list[float],
     betas: list[float],
     qp_quats_list: list[float],
     qp_scales_list: list[float],
     qp_opacity_list: list[float],
 ) -> set[ConfigKey]:
-    sh_set = _normalize_float_set(sh_qps) or set()
+    sh_set = _normalize_float_set(qp_sh_values) or set()
     beta_set = _normalize_float_set(betas) or set()
     quats_set = _normalize_float_set(qp_quats_list) or set()
     scales_set = _normalize_float_set(qp_scales_list) or set()
@@ -172,13 +172,13 @@ def _existing_config_keys(json_files: list[str]) -> tuple[set[ConfigKey], int]:
         try:
             with open(json_path, "r", encoding="utf-8") as f:
                 qp_data = json.load(f)
-            sh_qp = round(float(qp_data.get("sh_qp", qp_data.get("baseline_qp"))), 6)
+            qp_sh = round(float(qp_data.get("qp_sh", qp_data.get("qp_sh"))), 6)
             beta = round(float(qp_data["beta"]), 6)
             quantize_cfg = qp_data.get("quantize_config", {})
             qp_quats = round(float(qp_data.get("qp_quats", quantize_cfg.get("quats", 0))), 6)
             qp_scales = round(float(qp_data.get("qp_scales", quantize_cfg.get("scales", 0))), 6)
             qp_opacity = round(float(qp_data.get("qp_opacity", quantize_cfg.get("opacity", 0))), 6)
-            keys.add((sh_qp, beta, qp_quats, qp_scales, qp_opacity))
+            keys.add((qp_sh, beta, qp_quats, qp_scales, qp_opacity))
         except Exception:
             invalid += 1
     return keys, invalid
@@ -186,14 +186,14 @@ def _existing_config_keys(json_files: list[str]) -> tuple[set[ConfigKey], int]:
 
 def _find_missing_config_keys(
     seq: SequenceCfg, frame_id: int,
-    sh_qps: list[float],
+    qp_sh_values: list[float],
     betas: list[float],
     qp_quats_list: list[float],
     qp_scales_list: list[float],
     qp_opacity_list: list[float],
 ) -> tuple[set[ConfigKey], int, int, int]:
     expected_keys = _expected_config_keys(
-        sh_qps, betas, qp_quats_list, qp_scales_list, qp_opacity_list,
+        qp_sh_values, betas, qp_quats_list, qp_scales_list, qp_opacity_list,
     )
     json_files = find_qp_jsons(seq, frame_id)
     existing_keys, invalid = _existing_config_keys(json_files)
@@ -235,10 +235,10 @@ def _normalize_stage2_gpus(gpus: list[int]) -> list[int]:
 
 def filter_qp_jsons_by_selection(
     json_files: list[str],
-    selected_sh_qps: Optional[list[float]],
+    selected_qp_sh_values: Optional[list[float]],
     selected_betas: Optional[list[float]],
 ) -> list[str]:
-    qp_set = _normalize_float_set(selected_sh_qps)
+    qp_set = _normalize_float_set(selected_qp_sh_values)
     beta_set = _normalize_float_set(selected_betas)
 
     if qp_set is None and beta_set is None:
@@ -252,13 +252,13 @@ def filter_qp_jsons_by_selection(
         try:
             with open(json_path, "r", encoding="utf-8") as f:
                 qp_data = json.load(f)
-            sh_qp = round(float(qp_data.get("sh_qp", qp_data.get("baseline_qp"))), 6)
+            qp_sh = round(float(qp_data.get("qp_sh", qp_data.get("qp_sh"))), 6)
             beta = round(float(qp_data["beta"]), 6)
         except Exception:
             skipped_missing += 1
             continue
 
-        if qp_set is not None and sh_qp not in qp_set:
+        if qp_set is not None and qp_sh not in qp_set:
             skipped_filtered += 1
             continue
         if beta_set is not None and beta not in beta_set:
@@ -268,9 +268,9 @@ def filter_qp_jsons_by_selection(
         filtered.append(json_path)
 
     if skipped_missing > 0:
-        print(f"  [WARN] Skipped {skipped_missing} QP JSONs with invalid/missing sh_qp or beta fields.")
+        print(f"  [WARN] Skipped {skipped_missing} QP JSONs with invalid/missing qp_sh or beta fields.")
     if skipped_filtered > 0:
-        print(f"  [INFO] Filtered out {skipped_filtered} QP JSONs by selected sh_qp/beta.")
+        print(f"  [INFO] Filtered out {skipped_filtered} QP JSONs by selected qp_sh/beta.")
 
     return filtered
 
@@ -280,7 +280,7 @@ def filter_qp_jsons_by_selection(
 # ---------------------------------------------------------------------------
 
 def stage_generate(
-    generate_sh_qps: list[float],
+    generate_qp_sh_values: list[float],
     generate_betas: list[float],
     generate_qp_quats: list[float],
     generate_qp_scales: list[float],
@@ -295,7 +295,7 @@ def stage_generate(
         _qp.generate(
             sequences=SEQUENCES,
             frame_ids=frame_ids or FRAME_IDS,
-            sh_qps=generate_sh_qps,
+            qp_sh_values=generate_qp_sh_values,
             beta_values=generate_betas,
             output_root=QP_CONFIGS_ROOT,
             data_path=DATA_PATH,
@@ -417,7 +417,7 @@ def stage_evaluate(seq: SequenceCfg, frame_id: int, depths: list[int]) -> list[s
     json_files = find_qp_jsons(seq, frame_id)
     json_files = filter_qp_jsons_by_selection(
         json_files,
-        selected_sh_qps=EXPERIMENT_SH_QPS,
+        selected_qp_sh_values=EXPERIMENT_SH_QPS,
         selected_betas=EXPERIMENT_BETA_VALUES,
     )
     if not depths:
@@ -426,7 +426,7 @@ def stage_evaluate(seq: SequenceCfg, frame_id: int, depths: list[int]) -> list[s
     if not json_files:
         print(f"  [WARN] No selected QP config JSONs found for {seq['qp_dir_name']} frame {frame_id}")
         print(f"         Expected pattern: {QP_CONFIGS_ROOT}/{seq['qp_dir_name']}/frame_{frame_id}/qp_*.json")
-        print(f"         Selection: sh_qps={EXPERIMENT_SH_QPS}, beta_values={EXPERIMENT_BETA_VALUES}")
+        print(f"         Selection: qp_sh_values={EXPERIMENT_SH_QPS}, beta_values={EXPERIMENT_BETA_VALUES}")
         return []
 
     print(f"\n  Found {len(json_files)} QP configs for {seq['sequence_name']} frame {frame_id}")
@@ -573,7 +573,7 @@ def main() -> None:
     print(f"  Stage-2:    skip_saved_experiments={SKIP_SAVED_EXPERIMENTS}")
     print(f"  QP configs: {QP_CONFIGS_ROOT}")
     print(
-        f"  Experiment: beta_values={EXPERIMENT_BETA_VALUES}  sh_qps={EXPERIMENT_SH_QPS} "
+        f"  Experiment: beta_values={EXPERIMENT_BETA_VALUES}  qp_sh_values={EXPERIMENT_SH_QPS} "
         f"depths={EXPERIMENT_DEPTHS}"
     )
     print(

@@ -159,4 +159,4 @@ def all_results_csv(
 
 
 # Valid knob names for plot specs
-KNOB_NAMES = frozenset({"depth", "sh_qp", "beta", "qp_quats", "qp_scales", "qp_opacity"})
+KNOB_NAMES = frozenset({"depth", "qp_sh", "beta", "qp_quats", "qp_scales", "qp_opacity"})

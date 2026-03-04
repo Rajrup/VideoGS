@@ -31,7 +31,7 @@ from voxelize_pc import voxelize_pc
 
 _DEPLOY_SUPPORTS_COLOR_RESCALE = "color_rescale" in inspect.signature(deploy_compress_decompress).parameters
 
-BASELINE_QPS = [0.001, 0.005, 0.01, 0.02, 0.03, 0.04]
+QP_SH_VALUES = [0.001, 0.005, 0.01, 0.02, 0.03, 0.04]
 BETA_VALUES = [0.0, 0.4, 0.8, 1.2, 1.6, 2.0]
 J = 15
 SH_COLOR_SPACE = "klt"
@@ -55,8 +55,8 @@ def _parse_float_list_env(var_name: str) -> Optional[List[float]]:
     return [float(item) for item in values]
 
 
-_env_baseline_qps = _parse_float_list_env("FRAME0_BASELINE_QPS")
-RUNTIME_BASELINE_QPS = _env_baseline_qps if _env_baseline_qps is not None else BASELINE_QPS
+_env_qp_sh_values = _parse_float_list_env("FRAME0_QP_SH_VALUES")
+RUNTIME_QP_SH_VALUES = _env_qp_sh_values if _env_qp_sh_values is not None else QP_SH_VALUES
 
 _env_beta_values = _parse_float_list_env("FRAME0_BETA_VALUES")
 RUNTIME_BETA_VALUES = _env_beta_values if _env_beta_values is not None else BETA_VALUES
@@ -173,20 +173,20 @@ def compute_energy_rms(checkpoint_path: str, J: int, device: str) -> Tuple[NDArr
 def generate_qp_sets(
     rms: NDArray[np.float64],
     rms_max: float,
-    baseline_qps: List[float],
+    qp_sh_values: List[float],
     beta_values: List[float],
 ) -> List[Dict[str, Any]]:
     qp_sets: List[Dict[str, Any]] = []
     next_id = 0
-    for baseline_qp in baseline_qps:
+    for qp_sh in qp_sh_values:
         for beta in beta_values:
-            qps = baseline_qp * (rms_max / rms) ** beta
+            qps = qp_sh * (rms_max / rms) ** beta
             qp_sets.append(
                 {
                     "id": next_id,
-                    "label": f"qp{baseline_qp}_beta_{beta:.1f}",
+                    "label": f"qp{qp_sh}_beta_{beta:.1f}",
                     "values": qps.tolist(),
-                    "baseline_qp": baseline_qp,
+                    "qp_sh": qp_sh,
                     "beta": beta,
                 }
             )
@@ -242,7 +242,7 @@ def run_single_experiment(
         total_compressed_mb = total_compressed_bytes / (1024 * 1024)
 
         return {
-            "baseline_qp": qp_set["baseline_qp"],
+            "qp_sh": qp_set["qp_sh"],
             "beta": qp_set["beta"],
             "psnr_avg": psnr_avg,
             "total_compressed_bytes": total_compressed_bytes,
@@ -253,7 +253,7 @@ def run_single_experiment(
     except Exception as exc:
         print(f"[WARN] Experiment failed for {qp_set['label']}: {exc}")
         return {
-            "baseline_qp": qp_set["baseline_qp"],
+            "qp_sh": qp_set["qp_sh"],
             "beta": qp_set["beta"],
             "error": str(exc),
         }
@@ -266,7 +266,7 @@ def save_results_csv(results: List[Dict[str, Any]], csv_path: str) -> None:
         print(f"[WARN] Skipping {len(failed_rows)} failed rows when writing CSV: {csv_path}")
 
     fieldnames = [
-        "baseline_qp",
+        "qp_sh",
         "beta",
         "psnr_avg",
         "total_compressed_bytes",
@@ -325,7 +325,7 @@ def main():
         print(f"Checkpoint: {checkpoint_path}")
 
         rms, rms_max = compute_energy_rms(checkpoint_path, J, DEVICE)
-        qp_sets = generate_qp_sets(rms, rms_max, RUNTIME_BASELINE_QPS, RUNTIME_BETA_VALUES)
+        qp_sets = generate_qp_sets(rms, rms_max, RUNTIME_QP_SH_VALUES, RUNTIME_BETA_VALUES)
 
         sequence_results = []
         for qp_set in qp_sets:

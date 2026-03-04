@@ -26,6 +26,8 @@ from plyfile import PlyData
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _VIDEOGS_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))
 _LIVOGS_COMPRESSION = os.path.join(_VIDEOGS_ROOT, "LiVoGS", "compression")
+if _VIDEOGS_ROOT not in sys.path:
+    sys.path.insert(0, _VIDEOGS_ROOT)
 if _LIVOGS_COMPRESSION not in sys.path:
     sys.path.insert(0, _LIVOGS_COMPRESSION)
 

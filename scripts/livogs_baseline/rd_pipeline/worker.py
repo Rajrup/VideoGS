@@ -127,8 +127,8 @@ def main() -> None:
     print(f"  Frames:        {args.frame_start}..{args.frame_end} (interval={args.interval})")
     print(f"  Device:        {args.device}")
     if qp_label and qp_data is not None:
-        sh_qp = qp_data.get('sh_qp', qp_data.get('baseline_qp', '?'))
-        print(f"  QP label:      {qp_label}  (beta={qp_data['beta']}, sh_qp={sh_qp})")
+        qp_sh = qp_data.get('qp_sh', qp_data.get('qp_sh', '?'))
+        print(f"  QP label:      {qp_label}  (beta={qp_data['beta']}, qp_sh={qp_sh})")
     else:
         print(f"  J:             {args.j}  |  quantize_step: {args.quantize_step}  |  color space: {args.sh_color_space}")
     print(sep)

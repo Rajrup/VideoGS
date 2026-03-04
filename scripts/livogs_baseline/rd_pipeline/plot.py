@@ -66,7 +66,7 @@ def load_experiment_result(exp_dir: str, frame_id: int) -> Optional[dict[str, An
 
     quantize_cfg = qp_config.get("quantize_config", {})
     try:
-        sh_qp = float(qp_config.get("sh_qp", qp_config.get("baseline_qp")))
+        qp_sh = float(qp_config.get("qp_sh", qp_config.get("sh_qp", qp_config.get("baseline_qp"))))
         beta = float(qp_config["beta"])
         qp_quats = float(qp_config.get("qp_quats", quantize_cfg.get("quats")))
         qp_scales = float(qp_config.get("qp_scales", quantize_cfg.get("scales")))
@@ -77,7 +77,7 @@ def load_experiment_result(exp_dir: str, frame_id: int) -> Optional[dict[str, An
 
     return {
         "label": qp_config.get("label", os.path.basename(exp_dir)),
-        "sh_qp": sh_qp,
+        "qp_sh": qp_sh,
         "beta": beta,
         "qp_quats": qp_quats,
         "qp_scales": qp_scales,
@@ -120,7 +120,7 @@ def collect_results(
 
 NUMERIC_COLUMNS = (
     "depth",
-    "sh_qp",
+    "qp_sh",
     "beta",
     "qp_quats",
     "qp_scales",
@@ -130,7 +130,6 @@ NUMERIC_COLUMNS = (
     "decomp_psnr",
     "gt_psnr",
 )
-
 
 def _normalize_psnr_range(
     psnr_range: Optional[tuple[float, float]],

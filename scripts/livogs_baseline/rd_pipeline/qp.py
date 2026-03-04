@@ -3,19 +3,19 @@
 """Generate per-channel QP configs for LiVoGS RD experiments.
 
 For each (sequence, frame), computes SH energy RMS in KLT3 space and generates
-JSON QP config files for all (sh_qp, beta) combinations.
+JSON QP config files for all (qp_sh, beta) combinations.
 
 Output: {output_root}/{qp_dir_name}/frame_{frame_id}/qp_{label}.json
 
 Usable as a library (``qp.generate(...)``) or standalone CLI::
 
-    python scripts/livogs_baseline/rd_pipeline/qp.py --sh_qps 1 5 10
+    python scripts/livogs_baseline/rd_pipeline/qp.py --qp_sh_values 1 5 10
 
 JSON schema::
 
     {
         "label":           "shqp0.005_beta_0.8",
-        "sh_qp":           float,
+        "qp_sh":           float,
         "beta":            float,
         "frame_id":        int,
         "sequence_name":   str,
@@ -118,25 +118,25 @@ def compute_energy_rms(
 def generate_qp_sets(
     rms: np.ndarray[Any, Any],
     rms_max: float,
-    sh_qps: list[float],
+    qp_sh_values: list[float],
     beta_values: list[float],
 ) -> list[dict[str, Any]]:
-    """Generate QP value sets for all (sh_qp, beta) combinations.
+    """Generate QP value sets for all (qp_sh, beta) combinations.
 
-    For beta=0: uniform QPs (all channels get sh_qp).
+    For beta=0: uniform QPs (all channels get qp_sh).
     For beta>0: channels with lower RMS (less energy) get higher QP (coarser).
     """
     safe_rms = np.where(rms > 0, rms, rms.max() * 1e-6)
     qp_sets: list[dict[str, Any]] = []
     set_id = 0
-    for sh_qp in sh_qps:
+    for qp_sh in qp_sh_values:
         for beta in beta_values:
-            qps = sh_qp * (rms_max / safe_rms) ** beta
+            qps = qp_sh * (rms_max / safe_rms) ** beta
             qp_sets.append({
                 "id": set_id,
-                "label": f"shqp{sh_qp}_beta_{beta:.1f}",
+                "label": f"shqp{qp_sh}_beta_{beta:.1f}",
                 "values": qps.tolist(),
-                "sh_qp": sh_qp,
+                "qp_sh": qp_sh,
                 "beta": beta,
             })
             set_id += 1
@@ -177,7 +177,7 @@ def create_quantize_config(
 def generate(
     sequences: list[config.SequenceCfg],
     frame_ids: list[int],
-    sh_qps: list[float],
+    qp_sh_values: list[float],
     beta_values: list[float],
     output_root: str = config.QP_CONFIGS_ROOT,
     data_path: str = config.DATA_PATH,
@@ -239,7 +239,7 @@ def generate(
             rms, rms_max = compute_energy_rms(ckpt_path, j, device)
             print(f"  RMS: shape={rms.shape}  min={rms.min():.4f}  max={rms_max:.4f}")
 
-            qp_sets = generate_qp_sets(rms, rms_max, sh_qps, beta_values)
+            qp_sets = generate_qp_sets(rms, rms_max, qp_sh_values, beta_values)
 
             _qp_quats = qp_quats_list or [config.BASELINE_QUANTIZE_STEP["quats"]]
             _qp_scales = qp_scales_list or [config.BASELINE_QUANTIZE_STEP["scales"]]
@@ -257,10 +257,10 @@ def generate(
                             quantize_cfg = create_quantize_config(
                                 qp_set["values"], qp_quats, qp_scales, qp_opacity,
                             )
-                            label = f"shqp{qp_set['sh_qp']}_b{qp_set['beta']:.1f}_q{qp_quats}_s{qp_scales}_o{qp_opacity}"
+                            label = f"shqp{qp_set['qp_sh']}_b{qp_set['beta']:.1f}_q{qp_quats}_s{qp_scales}_o{qp_opacity}"
                             payload = {
                                 "label": label,
-                                "sh_qp": qp_set["sh_qp"],
+                                "qp_sh": qp_set["qp_sh"],
                                 "beta": qp_set["beta"],
                                 "qp_quats": qp_quats,
                                 "qp_scales": qp_scales,
@@ -305,7 +305,7 @@ if __name__ == "__main__":
     )
     _parser.add_argument("--output_dir",   default=None,
                          help="Override output root (absolute path)")
-    _parser.add_argument("--sh_qps", nargs="+", type=float, default=None,
+    _parser.add_argument("--qp_sh_values", nargs="+", type=float, default=None,
                          help="Override SH_QPS (space-separated floats)")
     _parser.add_argument("--beta_values",  nargs="+", type=float, default=None,
                          help="Override BETA_VALUES (space-separated floats)")
@@ -324,7 +324,7 @@ if __name__ == "__main__":
     generate(
         sequences=_STANDALONE_SEQUENCES,
         frame_ids=_args.frame_ids or _STANDALONE_FRAME_IDS,
-        sh_qps=_args.sh_qps or _STANDALONE_SH_QPS,
+        qp_sh_values=_args.qp_sh_values or _STANDALONE_SH_QPS,
         beta_values=_args.beta_values or _STANDALONE_BETA_VALUES,
         output_root=_args.output_dir or config.QP_CONFIGS_ROOT,
         selected_qp_dir_names=_args.qp_dir_names,

@@ -66,7 +66,7 @@ CSV_COLUMNS = [
     "sequence_name",
     "frame_id",
     "depth",
-    "sh_qp",
+    "qp_sh",
     "beta",
     "qp_opacity",
     "qp_scales",
@@ -150,7 +150,7 @@ def load_experiment(
 
     quantize_cfg = qp_cfg.get("quantize_config", {})
     try:
-        sh_qp = float(qp_cfg.get("sh_qp", qp_cfg.get("baseline_qp")))
+        qp_sh = float(qp_cfg.get("qp_sh", qp_cfg.get("sh_qp", qp_cfg.get("baseline_qp"))))
         beta = float(qp_cfg.get("beta", 0))
         qp_quats = float(qp_cfg.get("qp_quats", quantize_cfg.get("quats", 0)))
         qp_scales = float(qp_cfg.get("qp_scales", quantize_cfg.get("scales", 0)))
@@ -207,7 +207,7 @@ def load_experiment(
     label = qp_cfg.get("label", os.path.basename(exp_dir))
 
     return {
-        "sh_qp": sh_qp,
+        "qp_sh": qp_sh,
         "beta": beta,
         "qp_opacity": qp_opacity,
         "qp_scales": qp_scales,
@@ -285,7 +285,7 @@ def collect_rd_root(
     print()
 
     # Sort for deterministic output: depth descending, then by qp values
-    rows.sort(key=lambda r: (-r["depth"], r["sh_qp"], r["qp_quats"], r["qp_scales"], r["qp_opacity"]))
+    rows.sort(key=lambda r: (-r["depth"], r["qp_sh"], r["qp_quats"], r["qp_scales"], r["qp_opacity"]))
     return rows
 
 
