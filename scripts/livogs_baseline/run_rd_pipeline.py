@@ -95,6 +95,18 @@ EXPERIMENT_QP_SCALES: list[float] = [0.0001, 0.001, 0.002]
 EXPERIMENT_QP_OPACITY: list[float] = [0.0001, 0.01, 0.1, 0.5, 1]
 
 QP_CONFIGS_ROOT = config.QP_CONFIGS_ROOT
+ANSI_RED = "\033[31m"
+ANSI_RESET = "\033[0m"
+
+
+def _error_line(message: str) -> str:
+    if sys.stderr.isatty() and os.getenv("NO_COLOR") is None:
+        return f"{ANSI_RED}{message}{ANSI_RESET}"
+    return message
+
+
+def _print_error(message: str) -> None:
+    print(_error_line(message), file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +136,7 @@ def _run_subprocess(label: str, cmd: list[str], cwd: str = config.VIDEOGS_ROOT,
     print(f"\n{sep}\n{label}\n{sep}")
     result = subprocess.run(cmd, cwd=cwd, env=env)
     if result.returncode != 0:
-        print(f"[ERROR] '{label}' failed (exit {result.returncode})")
+        _print_error(f"[ERROR] '{label}' failed (exit {result.returncode})")
         return False
     return True
 
@@ -331,7 +343,7 @@ def stage_generate(
         )
         return True
     except Exception as e:
-        print(f"[ERROR] Stage 1 generation failed: {e}")
+        _print_error(f"[ERROR] Stage 1 generation failed: {e}")
         return False
 
 
@@ -374,7 +386,7 @@ def ensure_experiment_configs() -> bool:
         selected_qp_dir_names=missing_qp_dir_names,
         frame_ids=missing_frame_ids,
     ):
-        print("[ERROR] Stage 1 generation failed while filling missing experiment configs.")
+        _print_error("[ERROR] Stage 1 generation failed while filling missing experiment configs.")
         return False
 
     unresolved = []
@@ -393,7 +405,7 @@ def ensure_experiment_configs() -> bool:
                 unresolved.append((seq, frame_id, missing, expected_count, existing_count, invalid))
 
     if unresolved:
-        print("[ERROR] Experiment QP configs are still missing after generation:")
+        _print_error("[ERROR] Experiment QP configs are still missing after generation:")
         for seq, frame_id, missing, expected_count, existing_count, invalid in unresolved:
             print(
                 f"  - {seq['qp_dir_name']} frame {frame_id}: missing {len(missing)}/{expected_count} "
@@ -609,7 +621,7 @@ def main() -> None:
     print(sep)
 
     if not ensure_experiment_configs():
-        print("[ERROR] Cannot continue: experiment QP config requirements are not satisfied.")
+        _print_error("[ERROR] Cannot continue: experiment QP config requirements are not satisfied.")
         return
 
     all_failures: list[str] = []
