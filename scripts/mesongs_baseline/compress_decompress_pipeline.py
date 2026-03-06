@@ -47,44 +47,58 @@ from compression.utils import euler_to_quaternion
 # ---------------------------------------------------------------------------
 # HiFi4G Config (same structure as universal_config in mesongs.py)
 # ---------------------------------------------------------------------------
+DEFAULT_DEPTH = 12
+DEFAULT_NUM_BITS = 8
+DEFAULT_N_BLOCK = 57
+DEFAULT_CODEBOOK_SIZE = 2048
+DEFAULT_PRUNE_PERCENT = 0.0
 
 hifi4g_config = {
     'prune': {
-        '4K_Actor1_Greeting': 0.1,
-        '4K_Actor2_Dancing': 0.1,
-        '4K_Actor3_Violin': 0.1,
-        '4K_Actor4_Dancing': 0.1,
-        '4K_Actor5_Oil-paper_Umbrella': 0.1,
-        '4K_Actor6_Changing_Clothes': 0.1,
-        '4K_Actor7_Nunchaku': 0.1,
+        '4K_Actor1_Greeting': DEFAULT_PRUNE_PERCENT,
+        '4K_Actor2_Dancing': DEFAULT_PRUNE_PERCENT,
+        '4K_Actor3_Violin': DEFAULT_PRUNE_PERCENT,
+        '4K_Actor4_Dancing': DEFAULT_PRUNE_PERCENT,
+        '4K_Actor5_Oil-paper_Umbrella': DEFAULT_PRUNE_PERCENT,
+        '4K_Actor6_Changing_Clothes': DEFAULT_PRUNE_PERCENT,
+        '4K_Actor7_Nunchaku': DEFAULT_PRUNE_PERCENT,
     },
     'depth': {
-        '4K_Actor1_Greeting': 14,
-        '4K_Actor2_Dancing': 14,
-        '4K_Actor3_Violin': 14,
-        '4K_Actor4_Dancing': 14,
-        '4K_Actor5_Oil-paper_Umbrella': 14,
-        '4K_Actor6_Changing_Clothes': 14,
-        '4K_Actor7_Nunchaku': 14,
+        '4K_Actor1_Greeting': DEFAULT_DEPTH,
+        '4K_Actor2_Dancing': DEFAULT_DEPTH,
+        '4K_Actor3_Violin': DEFAULT_DEPTH,
+        '4K_Actor4_Dancing': DEFAULT_DEPTH,
+        '4K_Actor5_Oil-paper_Umbrella': DEFAULT_DEPTH,
+        '4K_Actor6_Changing_Clothes': DEFAULT_DEPTH,
+        '4K_Actor7_Nunchaku': DEFAULT_DEPTH,
     },
     'n_block': {
-        '4K_Actor1_Greeting': 66,
-        '4K_Actor2_Dancing': 66,
-        '4K_Actor3_Violin': 66,
-        '4K_Actor4_Dancing': 66,
-        '4K_Actor5_Oil-paper_Umbrella': 66,
-        '4K_Actor6_Changing_Clothes': 66,
-        '4K_Actor7_Nunchaku': 66,
+        '4K_Actor1_Greeting': DEFAULT_N_BLOCK,
+        '4K_Actor2_Dancing': DEFAULT_N_BLOCK,
+        '4K_Actor3_Violin': DEFAULT_N_BLOCK,
+        '4K_Actor4_Dancing': DEFAULT_N_BLOCK,
+        '4K_Actor5_Oil-paper_Umbrella': DEFAULT_N_BLOCK,
+        '4K_Actor6_Changing_Clothes': DEFAULT_N_BLOCK,
+        '4K_Actor7_Nunchaku': DEFAULT_N_BLOCK,
     },
     'cb': {
-        '4K_Actor1_Greeting': 2048,
-        '4K_Actor2_Dancing': 2048,
-        '4K_Actor3_Violin': 2048,
-        '4K_Actor4_Dancing': 2048,
-        '4K_Actor5_Oil-paper_Umbrella': 2048,
-        '4K_Actor6_Changing_Clothes': 2048,
-        '4K_Actor7_Nunchaku': 2048,
+        '4K_Actor1_Greeting': DEFAULT_CODEBOOK_SIZE,
+        '4K_Actor2_Dancing': DEFAULT_CODEBOOK_SIZE,
+        '4K_Actor3_Violin': DEFAULT_CODEBOOK_SIZE,
+        '4K_Actor4_Dancing': DEFAULT_CODEBOOK_SIZE,
+        '4K_Actor5_Oil-paper_Umbrella': DEFAULT_CODEBOOK_SIZE,
+        '4K_Actor6_Changing_Clothes': DEFAULT_CODEBOOK_SIZE,
+        '4K_Actor7_Nunchaku': DEFAULT_CODEBOOK_SIZE,
     },
+    'num_bits': {
+        '4K_Actor1_Greeting': DEFAULT_NUM_BITS,
+        '4K_Actor2_Dancing': DEFAULT_NUM_BITS,
+        '4K_Actor3_Violin': DEFAULT_NUM_BITS,
+        '4K_Actor4_Dancing': DEFAULT_NUM_BITS,
+        '4K_Actor5_Oil-paper_Umbrella': DEFAULT_NUM_BITS,
+        '4K_Actor6_Changing_Clothes': DEFAULT_NUM_BITS,
+        '4K_Actor7_Nunchaku': DEFAULT_NUM_BITS,
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -219,18 +233,18 @@ if __name__ == "__main__":
     parser.add_argument("--white_background", action="store_true")
 
     # MesonGS hyperparameters (override config defaults)
-    parser.add_argument("--depth", type=int, default=None, help="Octree depth (default: from config)")
-    parser.add_argument("--n_block", type=int, default=None, help="Block quantization count (default: from config)")
-    parser.add_argument("--codebook_size", type=int, default=None, help="VQ codebook size (default: from config)")
+    parser.add_argument("--depth", type=int, default=DEFAULT_DEPTH, help="Octree depth (default: from config)")
+    parser.add_argument("--n_block", type=int, default=DEFAULT_N_BLOCK, help="Block quantization count (default: from config)")
+    parser.add_argument("--codebook_size", type=int, default=DEFAULT_CODEBOOK_SIZE, help="VQ codebook size (default: from config)")
     parser.add_argument("--prune", action="store_true", help="Enable pruning before compression")
-    parser.add_argument("--prune_percent", type=float, default=None,
+    parser.add_argument("--prune_percent", type=float, default=DEFAULT_PRUNE_PERCENT,
                         help="Prune fraction (default: from config)")
     
     # MesonGS defaults that rarely change
     parser.add_argument("--oct_merge", type=str, default="mean", choices=["mean", "imp", "rand"])
     parser.add_argument("--batch_size", type=int, default=262144)
     parser.add_argument("--steps", type=int, default=1000)
-    parser.add_argument("--num_bits", type=int, default=8)
+    parser.add_argument("--num_bits", type=int, default=DEFAULT_NUM_BITS)
 
     args = parser.parse_args()
 
@@ -239,17 +253,18 @@ if __name__ == "__main__":
     if scene not in hifi4g_config['depth']:
         print(f"Warning: scene '{scene}' not in hifi4g_config, using defaults")
 
-    depth = args.depth if args.depth is not None else hifi4g_config['depth'].get(scene, 14)
-    n_block = args.n_block if args.n_block is not None else hifi4g_config['n_block'].get(scene, 66)
-    codebook_size = args.codebook_size if args.codebook_size is not None else hifi4g_config['cb'].get(scene, 2048)
-    prune_percent = args.prune_percent if args.prune_percent is not None else hifi4g_config['prune'].get(scene, 0.1)
+    depth = args.depth if args.depth is not None else hifi4g_config['depth'].get(scene, DEFAULT_DEPTH)
+    n_block = args.n_block if args.n_block is not None else hifi4g_config['n_block'].get(scene, DEFAULT_N_BLOCK)
+    codebook_size = args.codebook_size if args.codebook_size is not None else hifi4g_config['cb'].get(scene, DEFAULT_CODEBOOK_SIZE)
+    prune_percent = args.prune_percent if args.prune_percent is not None else hifi4g_config['prune'].get(scene, DEFAULT_PRUNE_PERCENT)
+    num_bits = args.num_bits if args.num_bits is not None else hifi4g_config['num_bits'].get(scene, DEFAULT_NUM_BITS)
 
     # --- Build dataset_args (SimpleNamespace matching what encode/decode_mesongs expects) ---
     from types import SimpleNamespace
     dataset_args = SimpleNamespace(
         sh_degree=args.sh_degree,
         depth=depth,
-        num_bits=args.num_bits,
+        num_bits=num_bits,
         oct_merge=args.oct_merge,
         raht=True,
         per_block_quant=True,
@@ -323,7 +338,7 @@ if __name__ == "__main__":
         max_iter = searchForMaxIteration(ckpt_path)
         ply_file_path = os.path.join(ckpt_path, f"iteration_{max_iter}", "point_cloud.ply")
 
-        gaussians = GaussianModel(args.sh_degree, depth=depth, num_bits=args.num_bits)
+        gaussians = GaussianModel(args.sh_degree, depth=depth, num_bits=num_bits)
         gaussians.load_ply(ply_file_path, og_number_points=-1, spatial_lr_scale=cameras_extent)
         N_original = gaussians.get_xyz.shape[0]
         uncompressed_size_bytes = compute_uncompressed_size(gaussians, args.sh_degree)

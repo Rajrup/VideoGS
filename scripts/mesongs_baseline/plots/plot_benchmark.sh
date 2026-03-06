@@ -3,7 +3,7 @@
 # Plot benchmark results for MesonGS compression
 DATASET_NAME="HiFi4G_Dataset"
 SEQUENCE_NAME="4K_Actor1_Greeting"
-CONFIG_NAME="depth_cfg_nblock_cfg_cb_cfg"
+CONFIG_NAME="params_default"
 
 working_dir="/home/rajrup/Project/VideoGS"
 data_path="/synology/rajrup/VideoGS"

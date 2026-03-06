@@ -23,12 +23,6 @@ END_FRAME=200
 INTERVAL=10
 SH_DEGREE=3
 
-# MesonGS-specific parameters (empty = use config defaults)
-DEPTH=""
-N_BLOCK=""
-CODEBOOK_SIZE=""
-PRUNE=""
-
 # --- Parse named arguments ---
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -38,10 +32,6 @@ while [[ $# -gt 0 ]]; do
         --frame_start)     START_FRAME="$2";     shift 2 ;;
         --frame_end)       END_FRAME="$2";       shift 2 ;;
         --interval)        INTERVAL="$2";        shift 2 ;;
-        --depth)           DEPTH="$2";           shift 2 ;;
-        --n_block)         N_BLOCK="$2";         shift 2 ;;
-        --codebook_size)   CODEBOOK_SIZE="$2";   shift 2 ;;
-        --prune)           PRUNE="--prune";      shift 1 ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
@@ -51,18 +41,8 @@ dataset_path="${data_path}/${DATASET_NAME}_processed/${SEQUENCE_NAME}"
 gt_model_path="${data_path}/train_output/${DATASET_NAME}/${SEQUENCE_NAME}/checkpoint"
 
 # Build output folder name from parameters
-output_tag="depth_${DEPTH:-cfg}_nblock_${N_BLOCK:-cfg}_cb_${CODEBOOK_SIZE:-cfg}"
-if [ -n "$PRUNE" ]; then
-    output_tag="${output_tag}_pruned"
-fi
+output_tag="params_default"
 output_folder="${data_path}/train_output/${DATASET_NAME}/${SEQUENCE_NAME}/compression/mesongs/${output_tag}"
-
-# Build optional args for the Python script
-OPTIONAL_ARGS=""
-[ -n "$DEPTH" ]         && OPTIONAL_ARGS="${OPTIONAL_ARGS} --depth ${DEPTH}"
-[ -n "$N_BLOCK" ]       && OPTIONAL_ARGS="${OPTIONAL_ARGS} --n_block ${N_BLOCK}"
-[ -n "$CODEBOOK_SIZE" ] && OPTIONAL_ARGS="${OPTIONAL_ARGS} --codebook_size ${CODEBOOK_SIZE}"
-[ -n "$PRUNE" ]         && OPTIONAL_ARGS="${OPTIONAL_ARGS} ${PRUNE}"
 
 VIDEOGS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MESONGS_ROOT="${VIDEOGS_ROOT}/MesonGS"
@@ -75,7 +55,6 @@ echo "  Dataset:      ${dataset_path}"
 echo "  GT model:     ${gt_model_path}"
 echo "  Output:       ${output_folder}"
 echo "  Scene:        ${SEQUENCE_NAME}"
-echo "  Optional:     ${OPTIONAL_ARGS}"
 echo "======================================================================"
 
 cd "${MESONGS_ROOT}"
@@ -90,8 +69,7 @@ python "${VIDEOGS_ROOT}/scripts/mesongs_baseline/compress_decompress_pipeline.py
     --frame_start ${START_FRAME} --frame_end ${END_FRAME} --interval ${INTERVAL} \
     --sh_degree ${SH_DEGREE} \
     --resolution ${RESOLUTION} \
-    --scene_name "${SEQUENCE_NAME}" \
-    ${OPTIONAL_ARGS}
+    --scene_name "${SEQUENCE_NAME}"
 
 ### 2. Evaluate Decompression Quality (PSNR/SSIM vs GT)
 echo ""
