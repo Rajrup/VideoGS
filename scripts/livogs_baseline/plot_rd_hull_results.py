@@ -14,12 +14,32 @@ from collect_rd_results import collect_rd_root, _infer_sequence_name
 from rd_pipeline.plot import plot_rd_scatter
 
 RD_OUTPUT_ROOTS: list[dict[str, Any]] = [
+    # {
+    #     "path": "/synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor1_Greeting/compression/livogs_rd_nvcomp",
+    #     "frame_ids": [0],
+    # },
+    # {
+    #     "path": "/synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor3_Violin/compression/livogs_rd_nvcomp",
+    #     "frame_ids": [0],
+    # },
+    # {
+    #     "path": "/synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor2_Dancing/compression/livogs_rd_nvcomp",
+    #     "frame_ids": [0],
+    # },
+    # {
+    #     "path": "/synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor4_Dancing/compression/livogs_rd_nvcomp",
+    #     "frame_ids": [0],
+    # },
+    # {
+    #     "path": "/synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor5_Oil-paper_Umbrella/compression/livogs_rd_nvcomp",
+    #     "frame_ids": [0],
+    # },
     {
-        "path": "/synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor1_Greeting/compression/livogs_rd_nvcomp",
+        "path": "/synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor6_Changing_Clothes/compression/livogs_rd_nvcomp",
         "frame_ids": [0],
     },
     # {
-    #     "path": "/synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor3_Violin/compression/livogs_rd",
+    #     "path": "/synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor7_Nunchaku/compression/livogs_rd_nvcomp",
     #     "frame_ids": [0],
     # },
 ]
@@ -36,7 +56,7 @@ SCATTER_SPEC: dict[str, Any] = {
     },
 }
 
-FORCE_COLLECT: bool = False
+FORCE_COLLECT: bool = True
 DEFAULT_PSNR_RANGE: Optional[tuple[float, float]] = None
 PLOT_OUTPUT_DIR: Optional[str] = None
 COLLECTED_CSV: Optional[str] = None
