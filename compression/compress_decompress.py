@@ -194,24 +194,20 @@ def decode_videogs_video(frame_start, ch, input_group_path, output_group_path):
 # Channel ↔ QP mapping
 # ---------------------------------------------------------------------------
 
-def build_channel_qp_map(sh_degree, qp, qfd, qfr1, qfr2, qfr3, qo, qs, qr):
+def build_channel_qp_map(sh_degree, qp):
     """Map each image channel index to its H.264 QP value.
 
-    Position high bytes (1, 3, 5) are always QP=0 (lossless).
-    Per-attribute QPs default to the main ``qp`` when not specified (None).
-
-    Channel layout (from quantize_videogs_image):
-      0,1  = x low/high      2,3  = y low/high      4,5  = z low/high
-      6,7,8 = nx, ny, nz
-      9,10,11 = f_dc_0, f_dc_1, f_dc_2
-      12..  = f_rest (band1, band2, band3 interleaved RGB)
-      ...   = opacity, scale_0..2, rot_0..3
+    Capping logic (matches original compress_image_2_video.py):
+      - Position MSB (1, 3, 5):     always 0 (lossless)
+      - Position LSB (0, 2, 4):     qp
+      - Normals (6, 7, 8):          qp
+      - DC color (9, 10, 11):       min(qp, 22)
+      - SH rest bands:              qp
+      - Opacity:                    qp
+      - Scale:                      min(qp, 22)
+      - Rotation:                   min(qp, 22)
     """
-    qfd = qfd if qfd is not None else qp
-    qo = qo if qo is not None else qp
-    qs = qs if qs is not None else qp
-    qr = qr if qr is not None else qp
-
+    capped_qp = min(qp, 22)
     ch_map = {}
 
     # Position
@@ -223,42 +219,30 @@ def build_channel_qp_map(sh_degree, qp, qfd, qfr1, qfr2, qfr3, qo, qs, qr):
     for ch in (6, 7, 8):
         ch_map[ch] = qp
 
-    # DC color
+    # DC color (capped)
     for ch in (9, 10, 11):
-        ch_map[ch] = qfd
+        ch_map[ch] = capped_qp
 
     # SH rest bands (band l has (2l+1)*3 channels)
-    band_sizes = [(2 * l + 1) * 3 for l in range(1, sh_degree + 1)]
-    band_qp_values = [
-        qfr1 if qfr1 is not None else qp,
-        qfr2 if qfr2 is not None else qp,
-        qfr3 if qfr3 is not None else qp,
-    ][:sh_degree]
     ch_offset = 12
-    for band_sz, band_qp in zip(band_sizes, band_qp_values):
+    for l in range(1, sh_degree + 1):
+        band_sz = (2 * l + 1) * 3
         for j in range(band_sz):
-            ch_map[ch_offset + j] = band_qp
+            ch_map[ch_offset + j] = qp
         ch_offset += band_sz
 
     # Opacity
-    ch_map[ch_offset] = qo
+    ch_map[ch_offset] = qp
     ch_offset += 1
 
-    # Scale
+    # Scale (capped)
     for j in range(3):
-        ch_map[ch_offset + j] = qs
+        ch_map[ch_offset + j] = capped_qp
     ch_offset += 3
 
-    # Rotation
+    # Rotation (capped)
     for j in range(4):
-        ch_map[ch_offset + j] = qr
-
-    # Cap DC/scale/rotation channels at QP=22 when their QP exceeds 22,
-    # matching the original compress_image_2_video.py behaviour.
-    capped = get_qp_capped_channels(sh_degree)
-    for ch in capped:
-        if ch in ch_map and ch_map[ch] > 22:
-            ch_map[ch] = 22
+        ch_map[ch_offset + j] = capped_qp
 
     return ch_map
 
