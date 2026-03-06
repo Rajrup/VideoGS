@@ -36,41 +36,41 @@ from rd_pipeline import qp as _qp
 DATA_PATH = config.DATA_PATH
 
 SEQUENCES: list[SequenceCfg] = [
-    {
-        "dataset_name":  "HiFi4G_Dataset",
-        "sequence_name": "4K_Actor1_Greeting",
-        "qp_dir_name":   "HiFi4G_4K_Actor1_Greeting",
-    },
-    {
-        "dataset_name":  "HiFi4G_Dataset",
-        "sequence_name": "4K_Actor2_Dancing",
-        "qp_dir_name":   "HiFi4G_4K_Actor2_Dancing",
-    },
-    {
-        "dataset_name":  "HiFi4G_Dataset",
-        "sequence_name": "4K_Actor3_Violin",
-        "qp_dir_name":   "HiFi4G_4K_Actor3_Violin",
-    },
-    {
-        "dataset_name":  "HiFi4G_Dataset",
-        "sequence_name": "4K_Actor4_Dancing",
-        "qp_dir_name":   "HiFi4G_4K_Actor4_Dancing",
-    },
-    {
-        "dataset_name":  "HiFi4G_Dataset",
-        "sequence_name": "4K_Actor5_Oil-paper_Umbrella",
-        "qp_dir_name":   "HiFi4G_4K_Actor5_Oil-paper_Umbrella",
-    },
+    # {
+    #     "dataset_name":  "HiFi4G_Dataset",
+    #     "sequence_name": "4K_Actor1_Greeting",
+    #     "qp_dir_name":   "HiFi4G_4K_Actor1_Greeting",
+    # },
+    # {
+    #     "dataset_name":  "HiFi4G_Dataset",
+    #     "sequence_name": "4K_Actor2_Dancing",
+    #     "qp_dir_name":   "HiFi4G_4K_Actor2_Dancing",
+    # },
+    # {
+    #     "dataset_name":  "HiFi4G_Dataset",
+    #     "sequence_name": "4K_Actor3_Violin",
+    #     "qp_dir_name":   "HiFi4G_4K_Actor3_Violin",
+    # },
+    # {
+    #     "dataset_name":  "HiFi4G_Dataset",
+    #     "sequence_name": "4K_Actor4_Dancing",
+    #     "qp_dir_name":   "HiFi4G_4K_Actor4_Dancing",
+    # },
+    # {
+    #     "dataset_name":  "HiFi4G_Dataset",
+    #     "sequence_name": "4K_Actor5_Oil-paper_Umbrella",
+    #     "qp_dir_name":   "HiFi4G_4K_Actor5_Oil-paper_Umbrella",
+    # },
     {
         "dataset_name":  "HiFi4G_Dataset",
         "sequence_name": "4K_Actor6_Changing_Clothes",
         "qp_dir_name":   "HiFi4G_4K_Actor6_Changing_Clothes",
     },
-    {
-        "dataset_name":  "HiFi4G_Dataset",
-        "sequence_name": "4K_Actor7_Nunchaku",
-        "qp_dir_name":   "HiFi4G_4K_Actor7_Nunchaku",
-    },
+    # {
+    #     "dataset_name":  "HiFi4G_Dataset",
+    #     "sequence_name": "4K_Actor7_Nunchaku",
+    #     "qp_dir_name":   "HiFi4G_4K_Actor7_Nunchaku",
+    # },
 ]
 
 RESOLUTION      = config.RESOLUTION
@@ -274,11 +274,23 @@ def filter_qp_jsons_by_selection(
     json_files: list[str],
     selected_qp_sh_values: Optional[list[float]],
     selected_betas: Optional[list[float]],
+    selected_qp_quats: Optional[list[float]] = None,
+    selected_qp_scales: Optional[list[float]] = None,
+    selected_qp_opacity: Optional[list[float]] = None,
 ) -> list[str]:
     qp_set = _normalize_float_set(selected_qp_sh_values)
     beta_set = _normalize_float_set(selected_betas)
+    quats_set = _normalize_float_set(selected_qp_quats)
+    scales_set = _normalize_float_set(selected_qp_scales)
+    opacity_set = _normalize_float_set(selected_qp_opacity)
 
-    if qp_set is None and beta_set is None:
+    if (
+        qp_set is None
+        and beta_set is None
+        and quats_set is None
+        and scales_set is None
+        and opacity_set is None
+    ):
         return json_files
 
     filtered: list[str] = []
@@ -291,6 +303,10 @@ def filter_qp_jsons_by_selection(
                 qp_data = json.load(f)
             qp_sh = round(float(qp_data.get("qp_sh", qp_data.get("qp_sh"))), 6)
             beta = round(float(qp_data["beta"]), 6)
+            quantize_cfg = qp_data.get("quantize_config", {})
+            qp_quats = round(float(qp_data.get("qp_quats", quantize_cfg.get("quats", 0))), 6)
+            qp_scales = round(float(qp_data.get("qp_scales", quantize_cfg.get("scales", 0))), 6)
+            qp_opacity = round(float(qp_data.get("qp_opacity", quantize_cfg.get("opacity", 0))), 6)
         except Exception:
             skipped_missing += 1
             continue
@@ -301,13 +317,25 @@ def filter_qp_jsons_by_selection(
         if beta_set is not None and beta not in beta_set:
             skipped_filtered += 1
             continue
+        if quats_set is not None and qp_quats not in quats_set:
+            skipped_filtered += 1
+            continue
+        if scales_set is not None and qp_scales not in scales_set:
+            skipped_filtered += 1
+            continue
+        if opacity_set is not None and qp_opacity not in opacity_set:
+            skipped_filtered += 1
+            continue
 
         filtered.append(json_path)
 
     if skipped_missing > 0:
-        print(f"  [WARN] Skipped {skipped_missing} QP JSONs with invalid/missing qp_sh or beta fields.")
+        print(
+            f"  [WARN] Skipped {skipped_missing} QP JSONs with invalid/missing selection fields "
+            "(qp_sh/beta/qp_quats/qp_scales/qp_opacity)."
+        )
     if skipped_filtered > 0:
-        print(f"  [INFO] Filtered out {skipped_filtered} QP JSONs by selected qp_sh/beta.")
+        print(f"  [INFO] Filtered out {skipped_filtered} QP JSONs by selected criteria.")
 
     return filtered
 
@@ -456,6 +484,9 @@ def stage_evaluate(seq: SequenceCfg, frame_id: int, depths: list[int]) -> list[s
         json_files,
         selected_qp_sh_values=EXPERIMENT_SH_QPS,
         selected_betas=EXPERIMENT_BETA_VALUES,
+        selected_qp_quats=EXPERIMENT_QP_QUATS,
+        selected_qp_scales=EXPERIMENT_QP_SCALES,
+        selected_qp_opacity=EXPERIMENT_QP_OPACITY,
     )
     if not depths:
         print("  [WARN] No experiment depths selected; skipping Stage 2.")
@@ -463,7 +494,12 @@ def stage_evaluate(seq: SequenceCfg, frame_id: int, depths: list[int]) -> list[s
     if not json_files:
         print(f"  [WARN] No selected QP config JSONs found for {seq['qp_dir_name']} frame {frame_id}")
         print(f"         Expected pattern: {QP_CONFIGS_ROOT}/{seq['qp_dir_name']}/frame_{frame_id}/qp_*.json")
-        print(f"         Selection: qp_sh_values={EXPERIMENT_SH_QPS}, beta_values={EXPERIMENT_BETA_VALUES}")
+        print(
+            "         Selection: "
+            f"qp_sh_values={EXPERIMENT_SH_QPS}, beta_values={EXPERIMENT_BETA_VALUES}, "
+            f"qp_quats={EXPERIMENT_QP_QUATS}, qp_scales={EXPERIMENT_QP_SCALES}, "
+            f"qp_opacity={EXPERIMENT_QP_OPACITY}"
+        )
         return []
 
     print(f"\n  Found {len(json_files)} QP configs for {seq['sequence_name']} frame {frame_id}")
