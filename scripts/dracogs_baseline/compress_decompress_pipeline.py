@@ -68,6 +68,8 @@ if __name__ == "__main__":
     parser.add_argument("--frame_start", type=int, default=0)
     parser.add_argument("--frame_end", type=int, default=200)
     parser.add_argument("--interval", type=int, default=1)
+    parser.add_argument("--frame_ids", type=str, default=None,
+                        help="Comma-separated frame IDs (overrides --frame_start/--frame_end/--interval)")
     parser.add_argument("--sh_degree", type=int, default=3)
     parser.add_argument("--scene_name", type=str, required=True,
                         help="HiFi4G sequence name (e.g. 4K_Actor1_Greeting)")
@@ -102,7 +104,12 @@ if __name__ == "__main__":
     print(f"  PLY path:           {args.ply_path}")
     print(f"  Output folder:      {args.output_folder}")
     print(f"  Output PLY folder:  {args.output_ply_folder}")
-    print(f"  Frames:             {args.frame_start} to {args.frame_end} (interval={args.interval})")
+    if args.frame_ids is not None:
+        frame_list = sorted(int(x.strip()) for x in args.frame_ids.split(","))
+        print(f"  Frames:             {frame_list}")
+    else:
+        frame_list = list(range(args.frame_start, args.frame_end, args.interval))
+        print(f"  Frames:             {args.frame_start} to {args.frame_end} (interval={args.interval})")
     print(f"  Scene:              {args.scene_name}")
     print(f"  SH degree:          {args.sh_degree}")
     print(f"  Quantization:       qp={qp} qfd={qfd} qfr1={qfr1} qfr2={qfr2} qfr3={qfr3} qo={qo} qs={qs} qr={qr}")
@@ -112,7 +119,7 @@ if __name__ == "__main__":
     # --- Per-frame loop ---
     benchmark_rows = []
 
-    for frame in tqdm(range(args.frame_start, args.frame_end, args.interval), desc="Frames"):
+    for frame in tqdm(frame_list, desc="Frames"):
 
         # --- 1. Locate and read PLY ---
         ckpt_path = os.path.join(args.ply_path, str(frame), "point_cloud")
@@ -208,9 +215,7 @@ if __name__ == "__main__":
             "qs": qs,
             "qr": qr,
             "cl": cl,
-            "frame_start": args.frame_start,
-            "frame_end": args.frame_end,
-            "interval": args.interval,
+            "frame_list": [int(f) for f in frame_list],
         }
         with open(os.path.join(args.output_folder, "dracogs_config.json"), "w") as f:
             json.dump(config_out, f, indent=4)

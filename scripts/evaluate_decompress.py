@@ -191,25 +191,32 @@ def evaluate_decompression_quality(args):
     decomp_metrics_all = {'psnr': [], 'ssim': []}
     results = []
 
+    # --- Resolve frame list ---
+    if getattr(args, 'frame_ids', None) is not None:
+        frame_list = sorted(int(x.strip()) for x in args.frame_ids.split(","))
+    else:
+        frame_list = list(range(args.frame_start, args.frame_end, args.interval))
+
     # --- Load test cameras ONCE from the first frame ---
+    first_frame = frame_list[0]
     print("Loading test cameras from first frame...")
     cameras, cam_file_paths, cam_resolutions = load_test_cameras(
-        args.dataset_path, args.frame_start, args.resolution, args.llffhold
+        args.dataset_path, first_frame, args.resolution, args.llffhold
     )
 
     n_test_cams = len(cameras)
-    frame_start = args.frame_start
-    frame_end = args.frame_end
-    interval = args.interval
 
     print(f"\nEvaluating decompression quality")
     print(f"  GT PLY path:           {args.gt_ply_path}")
     print(f"  Decompressed PLY path: {args.decompressed_ply_path}")
-    print(f"  Frames: [{frame_start}, {frame_end}) interval {interval}")
+    if getattr(args, 'frame_ids', None) is not None:
+        print(f"  Frames: {frame_list}")
+    else:
+        print(f"  Frames: [{args.frame_start}, {args.frame_end}) interval {args.interval}")
     print(f"  Test cameras: {n_test_cams}\n")
 
     # --- Per-frame evaluation loop ---
-    for frame in tqdm(range(frame_start, frame_end, interval), desc="Evaluating Frames"):
+    for frame in tqdm(frame_list, desc="Evaluating Frames"):
 
         # GT PLY
         ckpt_path = os.path.join(args.gt_ply_path, str(frame), "point_cloud")
@@ -311,9 +318,7 @@ def evaluate_decompression_quality(args):
                         "llffhold": args.llffhold,
                         "num_test_cameras": n_test_cams,
                         "resolution": args.resolution,
-                        "frame_start": frame_start,
-                        "frame_end": frame_end,
-                        "interval": interval,
+                        "frame_list": frame_list,
                     },
                     "summary": {
                         "gt_psnr": np.mean(gt_metrics_all['psnr']),
@@ -383,6 +388,8 @@ if __name__ == "__main__":
     parser.add_argument("--frame_start", type=int, default=0)
     parser.add_argument("--frame_end", type=int, default=200)
     parser.add_argument("--interval", type=int, default=1)
+    parser.add_argument("--frame_ids", type=str, default=None,
+                        help="Comma-separated frame IDs (overrides --frame_start/--frame_end/--interval)")
     args = parser.parse_args()
 
     if args.no_white_background:

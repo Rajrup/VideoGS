@@ -20,6 +20,7 @@ import argparse
 import subprocess
 import numpy as np
 from tqdm import tqdm
+from plyfile import PlyData
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _VIDEOGS_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))
@@ -38,8 +39,64 @@ from compress_decompress import (
     decode_channel_raw,
     build_channel_qp_map,
 )
-from compress_to_png_full_sh import get_ply_matrix, searchForMaxIteration
-from decompress_from_png_full_sh import save_ply
+
+
+def get_ply_matrix(file_path):
+    plydata = PlyData.read(file_path)
+    vertex = plydata["vertex"]
+    float_names = [p.name for p in vertex.properties if p.name != "vertex_id"]
+    num_vertices = len(vertex)
+    data_matrix = np.zeros((num_vertices, len(float_names)), dtype=np.float32)
+    for i, name in enumerate(float_names):
+        data_matrix[:, i] = vertex[name]
+
+    n_float = len(float_names) - 3
+    uncompressed_size_bytes = num_vertices * n_float * np.dtype(np.float32).itemsize
+    return data_matrix, uncompressed_size_bytes
+
+
+def searchForMaxIteration(folder):
+    saved_iters = [
+        int(fname.split("_")[-1])
+        for fname in os.listdir(folder)
+        if fname.startswith("iteration_") and fname.split("_")[-1].isdigit()
+    ]
+    if not saved_iters:
+        raise FileNotFoundError(f"No iteration_* folders found in: {folder}")
+    return max(saved_iters)
+
+
+def save_ply(data, output_file, sh_degree):
+    n, k = data.shape
+    attribute_names = ["x", "y", "z", "nx", "ny", "nz"]
+    for i in range(3):
+        attribute_names.append(f"f_dc_{i}")
+
+    n_rest = k - 17
+    for i in range(n_rest):
+        attribute_names.append(f"f_rest_{i}")
+
+    attribute_names.append("opacity")
+    for i in range(3):
+        attribute_names.append(f"scale_{i}")
+    for i in range(4):
+        attribute_names.append(f"rot_{i}")
+
+    assert k == len(attribute_names), (
+        f"Shape mismatch: data has {k} cols, expected {len(attribute_names)}"
+    )
+
+    with open(output_file, "wb") as ply_file:
+        ply_file.write(b"ply\n")
+        ply_file.write(b"format binary_little_endian 1.0\n")
+        ply_file.write(b"element vertex %d\n" % n)
+        for attribute_name in attribute_names:
+            ply_file.write(b"property float %s\n" % attribute_name.encode())
+        ply_file.write(b"end_header\n")
+
+        for i in range(n):
+            vertex_data = data[i].astype(np.float32).tobytes()
+            ply_file.write(vertex_data)
 
 CAPPED_QP = 22
 
@@ -61,6 +118,8 @@ if __name__ == "__main__":
     parser.add_argument("--frame_end", type=int, default=200)
     parser.add_argument("--group_size", type=int, default=20)
     parser.add_argument("--interval", type=int, default=1)
+    parser.add_argument("--frame_ids", type=str, default=None,
+                        help="Comma-separated frame IDs (overrides --frame_start/--frame_end/--interval)")
     parser.add_argument("--sh_degree", type=int, default=3)
     parser.add_argument("--qp", type=int, default=25,
                         help="H.264 QP (0=lossless, 51=worst). Default: 25")
@@ -76,8 +135,20 @@ if __name__ == "__main__":
     group_info_json = {}
     benchmark_rows = []
 
-    num_frames_total = args.frame_end - args.frame_start
-    num_groups = (num_frames_total + args.group_size - 1) // args.group_size
+    # --- Resolve frame list and build groups ---
+    if args.frame_ids is not None:
+        all_frames = sorted(int(x.strip()) for x in args.frame_ids.split(","))
+        frame_groups = [
+            list(range(f, f + args.group_size))
+            for f in all_frames
+        ]
+    else:
+        all_frames = list(range(args.frame_start, args.frame_end, args.interval))
+        frame_groups = [
+            all_frames[i:i + args.group_size]
+            for i in range(0, len(all_frames), args.group_size)
+        ]
+    num_groups = len(frame_groups)
 
     capped_qp = min(args.qp, CAPPED_QP)
     print("=" * 70)
@@ -86,8 +157,11 @@ if __name__ == "__main__":
     print(f"  PLY path:       {args.ply_path}")
     print(f"  Output folder:  {args.output_folder}")
     print(f"  Output PLY:     {args.output_ply_folder}")
-    print(f"  Frames:         {args.frame_start} to {args.frame_end} "
-          f"(interval={args.interval})")
+    if args.frame_ids is not None:
+        print(f"  Frames:         {all_frames}")
+    else:
+        print(f"  Frames:         {args.frame_start} to {args.frame_end} "
+              f"(interval={args.interval})")
     print(f"  Group size:     {args.group_size}")
     print(f"  SH degree:      {args.sh_degree}")
     print(f"  Groups:         {num_groups}")
@@ -105,13 +179,9 @@ if __name__ == "__main__":
     print(f"  Rotation:       {channel_qp_map[ch_offset + 4]}")
     print("=" * 70)
 
-    for group_idx in tqdm(range(num_groups), desc="Groups"):
-        g_frame_start = group_idx * args.group_size + args.frame_start
-        g_frame_end = min(
-            (group_idx + 1) * args.group_size - 1 + args.frame_start,
-            args.frame_end - 1,
-        )
-        frames = list(range(g_frame_start, g_frame_end + 1, args.interval))
+    for group_idx, frames in enumerate(tqdm(frame_groups, desc="Groups")):
+        g_frame_start = frames[0]
+        g_frame_end = frames[-1]
         if not frames:
             continue
 
@@ -132,6 +202,7 @@ if __name__ == "__main__":
         quantized = {}
         quantize_ms = {}
         frame_meta = {}
+        frame_image_size = {}
         image_size = None
 
         for frame in frames:
@@ -155,13 +226,11 @@ if __name__ == "__main__":
             if image_size is None:
                 image_size = img_sz
             else:
-                assert image_size == img_sz, (
-                    f"Image size mismatch in group {group_idx}: "
-                    f"expected {image_size}, got {img_sz}"
-                )
+                image_size = max(image_size, img_sz)
 
             quantized[frame] = images
             quantize_ms[frame] = (t1 - t0) * 1000.0
+            frame_image_size[frame] = img_sz
             frame_meta[frame] = {
                 "num_points": num_points,
                 "uncompressed_size": uncompressed_size,
@@ -176,6 +245,21 @@ if __name__ == "__main__":
         valid_frames = [f for f in frames if f in quantized]
         if not valid_frames:
             continue
+
+        if image_size is None:
+            continue
+
+        # Pad all channel images in this GOP to a shared square size so ffmpeg
+        # can encode a single video stream per channel across frames.
+        for frame in valid_frames:
+            src_size = frame_image_size[frame]
+            if src_size == image_size:
+                continue
+            for ch in quantized[frame]:
+                src = quantized[frame][ch]
+                padded = np.zeros((image_size, image_size), dtype=src.dtype)
+                padded[:src_size, :src_size] = src
+                quantized[frame][ch] = padded
 
         # ==================================================================
         # COMPRESS — Phase 2: Encode channels via raw-video pipe
@@ -279,10 +363,8 @@ if __name__ == "__main__":
 
     config_out = {
         "ply_path": args.ply_path,
-        "frame_start": args.frame_start,
-        "frame_end": args.frame_end,
+        "frame_list": [int(f) for f in all_frames],
         "group_size": args.group_size,
-        "interval": args.interval,
         "sh_degree": args.sh_degree,
         "qp": args.qp,
         "channel_qp_map": {str(k): v for k, v in sorted(channel_qp_map.items())},
