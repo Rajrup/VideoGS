@@ -17,6 +17,7 @@ Standalone usage::
 """
 
 import argparse
+import importlib
 import json
 import os
 import shutil
@@ -33,7 +34,6 @@ if config.SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, config.SCRIPTS_DIR)
 
 import codec
-from evaluate_decompress import evaluate_decompression_quality
 
 
 # ---------------------------------------------------------------------------
@@ -69,8 +69,12 @@ def main() -> None:
                         help="Torch device for codec (use cuda:0 with CUDA_VISIBLE_DEVICES pinning)")
     parser.add_argument("--disable_ply_saving", action="store_true",
                         help="Skip saving decompressed PLY files")
+    parser.add_argument("--disable_evaluation", action="store_true",
+                        help="Skip quality evaluation (metrics + renders)")
+    parser.add_argument("--save_renders", action="store_true",
+                        help="Save rendered images during evaluation")
     parser.add_argument("--disable_image_saving", action="store_true",
-                        help="Skip quality evaluation (image rendering)")
+                        help="Deprecated alias: disables render image saving")
     parser.add_argument("--nvcomp_algorithm", type=str, default=config.NVCOMP_ALGORITHM,
                         help="nvCOMP lossless compression algorithm for positions "
                              "(e.g. ANS, LZ4, Snappy, None to disable)")
@@ -80,6 +84,11 @@ def main() -> None:
     if args.frame_id is not None:
         args.frame_start = args.frame_id
         args.frame_end   = args.frame_id + 1
+
+    if args.disable_image_saving and args.save_renders:
+        print("[WARN] --disable_image_saving overrides --save_renders.")
+    if args.disable_image_saving:
+        args.save_renders = False
 
     nvcomp_algorithm = None if args.nvcomp_algorithm == "None" else args.nvcomp_algorithm
 
@@ -169,16 +178,19 @@ def main() -> None:
     )
 
     # --- Step 2: Evaluate Decompression Quality (direct call) ----------------
-    if args.disable_image_saving:
-        print("[INFO] --disable_image_saving: skipping quality evaluation.")
+    if args.disable_evaluation:
+        print("[INFO] --disable_evaluation: skipping quality evaluation.")
     else:
         print(f"\n{sep}\nStep 2: Evaluate Decompression Quality\n{sep}")
+        evaluate_decompression_quality = importlib.import_module(
+            "evaluate_decompress"
+        ).evaluate_decompression_quality
         eval_args = argparse.Namespace(
             gt_ply_path=gt_model_path,
             decompressed_ply_path=os.path.join(output_folder, "decompressed_ply"),
             dataset_path=dataset_path,
             output_render_path=os.path.join(output_folder, "evaluation"),
-            save_renders=True,
+            save_renders=args.save_renders,
             sh_degree=args.sh_degree,
             resolution=args.resolution,
             white_background=True,
