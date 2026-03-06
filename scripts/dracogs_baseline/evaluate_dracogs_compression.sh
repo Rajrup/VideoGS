@@ -28,16 +28,12 @@ END_FRAME=200
 INTERVAL=1
 SH_DEGREE=3
 
-# DracoGS quantization parameters
-QP=16
-QFD=16
-QFR1=16
-QFR2=16
-QFR3=16
-QO=16
-QS=16
-QR=16
-CL=1
+# LTS quantization parameters
+EG=16
+EO=16
+ET=16
+ES=16
+CL=10
 
 # --- Parse named arguments ---
 while [[ $# -gt 0 ]]; do
@@ -48,14 +44,10 @@ while [[ $# -gt 0 ]]; do
         --frame_start)     START_FRAME="$2";     shift 2 ;;
         --frame_end)       END_FRAME="$2";       shift 2 ;;
         --interval)        INTERVAL="$2";        shift 2 ;;
-        --qp)              QP="$2";              shift 2 ;;
-        --qfd)             QFD="$2";             shift 2 ;;
-        --qfr1)            QFR1="$2";            shift 2 ;;
-        --qfr2)            QFR2="$2";            shift 2 ;;
-        --qfr3)            QFR3="$2";            shift 2 ;;
-        --qo)              QO="$2";              shift 2 ;;
-        --qs)              QS="$2";              shift 2 ;;
-        --qr)              QR="$2";              shift 2 ;;
+        --eg)              EG="$2";              shift 2 ;;
+        --eo)              EO="$2";              shift 2 ;;
+        --et)              ET="$2";              shift 2 ;;
+        --es)              ES="$2";              shift 2 ;;
         --cl)              CL="$2";              shift 2 ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
@@ -66,7 +58,7 @@ dataset_path="${data_path}/${DATASET_NAME}_processed/${SEQUENCE_NAME}"
 gt_model_path="${data_path}/train_output/${DATASET_NAME}/${SEQUENCE_NAME}/checkpoint"
 
 # Build output folder name from quantization parameters
-output_tag="qp_${QP}_qfd_${QFD}_qfr1_${QFR1}_qfr2_${QFR2}_qfr3_${QFR3}_qo_${QO}_qs_${QS}_qr_${QR}_cl_${CL}"
+output_tag="eg_${EG}_eo_${EO}_et_${ET}_es_${ES}_cl_${CL}"
 output_folder="${data_path}/train_output/${DATASET_NAME}/${SEQUENCE_NAME}/compression/dracogs/${output_tag}"
 
 VIDEOGS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -79,7 +71,7 @@ echo "  Dataset:      ${dataset_path}"
 echo "  GT model:     ${gt_model_path}"
 echo "  Output:       ${output_folder}"
 echo "  Scene:        ${SEQUENCE_NAME}"
-echo "  Quant:        qp=${QP} qfd=${QFD} qfr1=${QFR1} qfr2=${QFR2} qfr3=${QFR3} qo=${QO} qs=${QS} qr=${QR} cl=${CL}"
+echo "  Quant:        eg=${EG} eo=${EO} et=${ET} es=${ES} cl=${CL}"
 echo "======================================================================"
 
 eval "$(conda shell.bash hook 2>/dev/null)"
@@ -93,8 +85,8 @@ python scripts/dracogs_baseline/compress_decompress_pipeline.py \
     --frame_start ${START_FRAME} --frame_end ${END_FRAME} --interval ${INTERVAL} \
     --sh_degree ${SH_DEGREE} \
     --scene_name "${SEQUENCE_NAME}" \
-    --qp ${QP} --qfd ${QFD} --qfr1 ${QFR1} --qfr2 ${QFR2} --qfr3 ${QFR3} \
-    --qo ${QO} --qs ${QS} --qr ${QR} --cl ${CL}
+    --eg ${EG} --eo ${EO} --et ${ET} --es ${ES} \
+    --cl ${CL}
 
 ### 2. Evaluate Decompression Quality (PSNR/SSIM vs GT)
 echo ""
