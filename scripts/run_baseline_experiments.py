@@ -1,15 +1,10 @@
 #!/usr/bin/env python3
-"""Run selected baseline compression experiments.
+"""Run DracoGS, MesonGS, and VideoGS baselines for VideoGS repo.
 
-This is the Python orchestrator for DracoGS, MesonGS, and VideoGS baseline
-pipelines. Keep hardcoded settings in the global configuration section below.
-
-Usage:
-  python scripts/run_selected_experiments.py
-  python scripts/run_selected_experiments.py --dry-run
-
-Wrapper:
-  bash scripts/run_selected_experiments.sh [--dry-run]
+Note: baseline pipelines use range-based frame arguments
+(`--frame_start/--frame_end/--interval`, end-exclusive). To support sparse
+selected frame lists, this runner executes the full continuous range that
+spans each list, then downstream collection filters to the selected frame IDs.
 """
 
 from __future__ import annotations
@@ -36,26 +31,29 @@ EVALUATION_ENV = "videogs"
 CUDA_DEVICE = "0"
 
 DATASET_NAME = "HiFi4G_Dataset"
-RESOLUTION = 2
-SH_DEGREE = 3
 DATA_PATH = "/synology/rajrup/VideoGS"
+SH_DEGREE = 3
+RESOLUTION = 2
+
 DRACOGS_EG = 16
 DRACOGS_EO = 16
 DRACOGS_ET = 16
 DRACOGS_ES = 16
 DRACOGS_CL = 10
-VIDEOGS_QP = 25
+
+VIDEOGS_QPS = [0, 4, 10, 15, 20, 25]
 VIDEOGS_GROUP_SIZE = 20
 
 EXPERIMENTS: dict[str, list[int]] = {
-    "4K_Actor1_Greeting": [0, 50, 100, 150],
-    # "4K_Actor2_Dancing": [0, 50, 100, 150],
-    # "4K_Actor3_Violin": [0, 50, 100, 150],
-    # "4K_Actor4_Dancing": [0, 50, 100, 150],
-    # "4K_Actor5_Oil-paper_Umbrella": [0, 50, 100, 150],
-    # "4K_Actor6_Changing_Clothes": [0, 50, 100, 150],
-    # "4K_Actor7_Nunchaku": [0, 50, 100, 150],
+    "4K_Actor1_Greeting": [0],
+    "4K_Actor2_Dancing": [0],
+    "4K_Actor3_Violin": [0],
+    "4K_Actor4_Dancing": [0],
+    "4K_Actor5_Oil-paper_Umbrella": [0],
+    "4K_Actor6_Changing_Clothes": [0],
+    "4K_Actor7_Nunchaku": [0],
 }
+
 
 SCRIPT_PATH = Path(__file__).resolve()
 SCRIPTS_DIR = SCRIPT_PATH.parent
@@ -127,45 +125,73 @@ def ensure_required_envs(baselines: list[str]) -> None:
         )
 
 
-def ensure_videogs_frame_spacing(experiments: dict[str, list[int]], gop: int) -> None:
-    for sequence, frame_ids in experiments.items():
-        if len(frame_ids) < 2:
-            continue
-
-        sorted_ids = sorted(frame_ids)
-        for prev_id, next_id in zip(sorted_ids, sorted_ids[1:]):
-            gap = next_id - prev_id
-            if gap < gop:
-                raise RuntimeError(
-                    f"Invalid VideoGS frame selection for '{sequence}': "
-                    f"gap {gap} between frames {prev_id} and {next_id} "
-                    f"must be greater than or equal to GOP ({gop})."
-                )
+def selected_to_span(frame_ids: list[int]) -> tuple[int, int, int]:
+    if not frame_ids:
+        raise ValueError("Frame list must not be empty")
+    sorted_ids = sorted(set(int(v) for v in frame_ids))
+    return sorted_ids[0], sorted_ids[-1] + 1, 1
 
 
-def get_output_folder(baseline: str, sequence: str) -> str:
-    base = f"{DATA_PATH}/train_output/{DATASET_NAME}/{sequence}/compression"
+def frame_span_tag(frame_start: int, frame_end: int, interval: int) -> str:
+    frame_end_inclusive = frame_end - 1
+    return f"frames_{frame_start}_{frame_end_inclusive}_int_{interval}"
+
+
+def get_output_folder(
+    baseline: str,
+    sequence: str,
+    frame_start: int,
+    frame_end: int,
+    interval: int,
+    videogs_qp: int | None = None,
+) -> str:
+    model_root = Path(DATA_PATH) / "train_output" / DATASET_NAME / sequence
+    run_tag = frame_span_tag(frame_start, frame_end, interval)
+
     if baseline == "dracogs":
-        return (
-            f"{base}/dracogs/"
-            f"eg_{DRACOGS_EG}_eo_{DRACOGS_EO}_et_{DRACOGS_ET}_es_{DRACOGS_ES}_cl_{DRACOGS_CL}"
+        tag = (
+            f"eg_{DRACOGS_EG}_eo_{DRACOGS_EO}_"
+            f"et_{DRACOGS_ET}_es_{DRACOGS_ES}_cl_{DRACOGS_CL}"
         )
+        return str(model_root / "compression" / "dracogs" / tag / run_tag)
     if baseline == "mesongs":
-        return f"{base}/mesongs/params_default"
+        return str(model_root / "compression" / "mesongs" / "params_default" / run_tag)
     if baseline == "videogs":
-        return f"{base}/videogs/qp_{VIDEOGS_QP}"
-    raise ValueError(f"Unknown baseline '{baseline}'")
+        if videogs_qp is None:
+            raise ValueError("videogs_qp must be provided for videogs output folder")
+        return str(model_root / "compression" / "videogs" / f"qp_{videogs_qp}" / run_tag)
+
+    raise ValueError(f"Unknown baseline: {baseline}")
 
 
-def get_paths(sequence: str, baseline: str) -> ExperimentPaths:
-    return ExperimentPaths(
-        dataset_path=f"{DATA_PATH}/{DATASET_NAME}_processed/{sequence}",
-        gt_model_path=f"{DATA_PATH}/train_output/{DATASET_NAME}/{sequence}/checkpoint",
-        output_folder=get_output_folder(baseline, sequence),
+def get_paths(
+    sequence: str,
+    baseline: str,
+    frame_start: int,
+    frame_end: int,
+    interval: int,
+    videogs_qp: int | None = None,
+) -> ExperimentPaths:
+    dataset_path = str(Path(DATA_PATH) / f"{DATASET_NAME}_processed" / sequence)
+    gt_model_path = str(Path(DATA_PATH) / "train_output" / DATASET_NAME / sequence / "checkpoint")
+    output_folder = get_output_folder(
+        baseline,
+        sequence,
+        frame_start,
+        frame_end,
+        interval,
+        videogs_qp=videogs_qp,
     )
+    return ExperimentPaths(dataset_path, gt_model_path, output_folder)
 
 
-def run_evaluation(paths: ExperimentPaths, frame_ids_csv: str, dry_run: bool) -> None:
+def run_evaluation(
+    paths: ExperimentPaths,
+    frame_start: int,
+    frame_end: int,
+    interval: int,
+    dry_run: bool,
+) -> None:
     cmd = conda_python_cmd(
         EVALUATION_ENV,
         VIDEOGS_ROOT / "scripts" / "evaluate_decompress.py",
@@ -178,21 +204,27 @@ def run_evaluation(paths: ExperimentPaths, frame_ids_csv: str, dry_run: bool) ->
             paths.dataset_path,
             "--output_render_path",
             f"{paths.output_folder}/evaluation",
-            "--save_renders",
             "--sh_degree",
             str(SH_DEGREE),
             "--resolution",
             str(RESOLUTION),
-            "--frame_ids",
-            frame_ids_csv,
+            "--frame_start",
+            str(frame_start),
+            "--frame_end",
+            str(frame_end),
+            "--interval",
+            str(interval),
         ],
     )
     run_cmd(cmd, cwd=VIDEOGS_ROOT, dry_run=dry_run)
 
 
-def run_dracogs(sequence: str, frame_ids_csv: str, dry_run: bool) -> None:
-    paths = get_paths(sequence, "dracogs")
-    log_step(f"DracoGS | {sequence} | frames: {frame_ids_csv} | {timestamp()}")
+def run_dracogs(sequence: str, selected_frames: list[int], dry_run: bool) -> None:
+    frame_start, frame_end, interval = selected_to_span(selected_frames)
+    paths = get_paths(sequence, "dracogs", frame_start, frame_end, interval)
+    log_step(
+        f"DracoGS | {sequence} | frames: {frame_start}-{frame_end - 1}:{interval} | {timestamp()}"
+    )
 
     cmd = conda_python_cmd(
         BASELINE_ENVS["dracogs"],
@@ -204,8 +236,12 @@ def run_dracogs(sequence: str, frame_ids_csv: str, dry_run: bool) -> None:
             paths.output_folder,
             "--output_ply_folder",
             f"{paths.output_folder}/decompressed_ply",
-            "--frame_ids",
-            frame_ids_csv,
+            "--frame_start",
+            str(frame_start),
+            "--frame_end",
+            str(frame_end),
+            "--interval",
+            str(interval),
             "--sh_degree",
             str(SH_DEGREE),
             "--scene_name",
@@ -223,12 +259,15 @@ def run_dracogs(sequence: str, frame_ids_csv: str, dry_run: bool) -> None:
         ],
     )
     run_cmd(cmd, cwd=VIDEOGS_ROOT, dry_run=dry_run)
-    run_evaluation(paths, frame_ids_csv, dry_run)
+    run_evaluation(paths, frame_start, frame_end, interval, dry_run)
 
 
-def run_mesongs(sequence: str, frame_ids_csv: str, dry_run: bool) -> None:
-    paths = get_paths(sequence, "mesongs")
-    log_step(f"MesonGS | {sequence} | frames: {frame_ids_csv} | {timestamp()}")
+def run_mesongs(sequence: str, selected_frames: list[int], dry_run: bool) -> None:
+    frame_start, frame_end, interval = selected_to_span(selected_frames)
+    paths = get_paths(sequence, "mesongs", frame_start, frame_end, interval)
+    log_step(
+        f"MesonGS | {sequence} | frames: {frame_start}-{frame_end - 1}:{interval} | {timestamp()}"
+    )
 
     cmd = conda_python_cmd(
         BASELINE_ENVS["mesongs"],
@@ -242,8 +281,12 @@ def run_mesongs(sequence: str, frame_ids_csv: str, dry_run: bool) -> None:
             paths.output_folder,
             "--output_ply_folder",
             f"{paths.output_folder}/decompressed_ply",
-            "--frame_ids",
-            frame_ids_csv,
+            "--frame_start",
+            str(frame_start),
+            "--frame_end",
+            str(frame_end),
+            "--interval",
+            str(interval),
             "--sh_degree",
             str(SH_DEGREE),
             "--resolution",
@@ -253,40 +296,83 @@ def run_mesongs(sequence: str, frame_ids_csv: str, dry_run: bool) -> None:
         ],
     )
     run_cmd(cmd, cwd=MESONGS_ROOT, dry_run=dry_run)
-    run_evaluation(paths, frame_ids_csv, dry_run)
+    run_evaluation(paths, frame_start, frame_end, interval, dry_run)
 
 
-def run_videogs(sequence: str, frame_ids_csv: str, dry_run: bool) -> None:
-    paths = get_paths(sequence, "videogs")
-    log_step(f"VideoGS | {sequence} | frames: {frame_ids_csv} | {timestamp()}")
+def run_videogs(sequence: str, selected_frames: list[int], dry_run: bool) -> None:
+    for anchor_frame in sorted(set(int(v) for v in selected_frames)):
+        gop_start = anchor_frame
+        gop_end = anchor_frame + VIDEOGS_GROUP_SIZE
+        for qp in VIDEOGS_QPS:
+            paths = get_paths(
+                sequence,
+                "videogs",
+                gop_start,
+                gop_end,
+                1,
+                videogs_qp=qp,
+            )
+            log_step(
+                f"VideoGS | {sequence} | QP: {qp} | "
+                f"anchor: {anchor_frame} | frames: {gop_start}-{gop_end - 1}:1 | {timestamp()}"
+            )
 
-    cmd = conda_python_cmd(
-        BASELINE_ENVS["videogs"],
-        VIDEOGS_ROOT / "scripts" / "videogs_baseline" / "compress_decompress_pipeline.py",
-        [
-            "--ply_path",
-            paths.gt_model_path,
-            "--output_folder",
-            paths.output_folder,
-            "--output_ply_folder",
-            f"{paths.output_folder}/decompressed_ply",
-            "--frame_ids",
-            frame_ids_csv,
-            "--group_size",
-            str(VIDEOGS_GROUP_SIZE),
-            "--sh_degree",
-            str(SH_DEGREE),
-            "--qp",
-            str(VIDEOGS_QP),
-        ],
-    )
-    run_cmd(cmd, cwd=VIDEOGS_ROOT, dry_run=dry_run)
-    run_evaluation(paths, frame_ids_csv, dry_run)
+            cmd = conda_python_cmd(
+                BASELINE_ENVS["videogs"],
+                VIDEOGS_ROOT / "scripts" / "videogs_baseline" / "compress_decompress_pipeline.py",
+                [
+                    "--ply_path",
+                    paths.gt_model_path,
+                    "--output_folder",
+                    paths.output_folder,
+                    "--output_ply_folder",
+                    f"{paths.output_folder}/decompressed_ply",
+                    "--frame_start",
+                    str(gop_start),
+                    "--frame_end",
+                    str(gop_end),
+                    "--interval",
+                    "1",
+                    "--group_size",
+                    str(VIDEOGS_GROUP_SIZE),
+                    "--sh_degree",
+                    str(SH_DEGREE),
+                    "--qp",
+                    str(qp),
+                ],
+            )
+            run_cmd(cmd, cwd=VIDEOGS_ROOT, dry_run=dry_run)
+            run_evaluation(paths, gop_start, gop_end, 1, dry_run)
 
 
-Runner = Callable[[str, str, bool], None]
+def get_expected_output_folders(
+    baseline: str,
+    sequence: str,
+    selected_frames: list[int],
+) -> list[str]:
+    if baseline == "videogs":
+        output_folders: list[str] = []
+        for anchor_frame in sorted(set(int(v) for v in selected_frames)):
+            gop_start = anchor_frame
+            gop_end = anchor_frame + VIDEOGS_GROUP_SIZE
+            output_folders.extend(
+                get_output_folder(
+                    baseline,
+                    sequence,
+                    gop_start,
+                    gop_end,
+                    1,
+                    videogs_qp=qp,
+                )
+                for qp in VIDEOGS_QPS
+            )
+        return output_folders
 
-BASELINE_RUNNERS: dict[str, Runner] = {
+    frame_start, frame_end, interval = selected_to_span(selected_frames)
+    return [get_output_folder(baseline, sequence, frame_start, frame_end, interval)]
+
+
+BASELINE_RUNNERS: dict[str, Callable[[str, list[int], bool], None]] = {
     "dracogs": run_dracogs,
     "mesongs": run_mesongs,
     "videogs": run_videogs,
@@ -294,75 +380,71 @@ BASELINE_RUNNERS: dict[str, Runner] = {
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run selected compression experiments.")
+    parser = argparse.ArgumentParser(description="Run selected baseline experiments for VideoGS")
+    parser.add_argument("--dry-run", action="store_true", help="Print commands without executing")
     parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print commands without executing them.",
+        "--baselines",
+        nargs="+",
+        choices=BASELINES,
+        default=BASELINES,
+        help="Baselines to run (default: all)",
     )
     return parser.parse_args()
 
 
-def format_duration(total_seconds: int) -> str:
-    hours = total_seconds // 3600
-    minutes = (total_seconds % 3600) // 60
-    seconds = total_seconds % 60
-    return f"{hours}h {minutes}m {seconds}s"
-
-
 def main() -> None:
     args = parse_args()
-    if args.dry_run:
-        print("[DRY RUN] Commands will be printed but not executed.")
+    selected_baselines = args.baselines
 
-    unknown = [name for name in BASELINES if name not in BASELINE_RUNNERS]
+    unknown = [name for name in selected_baselines if name not in BASELINE_RUNNERS]
     if unknown:
         raise ValueError(f"Unknown baseline(s): {unknown}")
 
-    ensure_required_envs(BASELINES)
-    if "videogs" in BASELINES:
-        ensure_videogs_frame_spacing(EXPERIMENTS, VIDEOGS_GROUP_SIZE)
+    ensure_required_envs(selected_baselines)
 
-    script_start = int(time.time())
-    failed_runs: list[tuple[str, str]] = []
-
-    log_header("Selected Experiments Runner")
+    run_start = time.time()
+    log_header("Selected Baseline Experiments Runner (VideoGS)")
     print(f"  Started:    {timestamp()}")
     print(f"  Dataset:    {DATASET_NAME}")
-    print(f"  Baselines:  {' '.join(BASELINES)}")
+    print(f"  Baselines:  {', '.join(selected_baselines)}")
     print(f"  Sequences:  {len(EXPERIMENTS)}")
     print(f"  Resolution: {RESOLUTION}")
     print(f"  SH degree:  {SH_DEGREE}")
     print(f"  CUDA:       {CUDA_DEVICE}")
     print(f"  Data path:  {DATA_PATH}")
+    if args.dry_run:
+        print("  Mode:       DRY RUN")
     print("=" * 70)
 
-    for sequence, frame_ids in EXPERIMENTS.items():
-        frame_ids_csv = ",".join(str(fid) for fid in frame_ids)
-        log_header(f"Sequence: {sequence} | Frames: {frame_ids_csv}")
+    failed_runs: list[tuple[str, str]] = []
 
-        for baseline in BASELINES:
+    for sequence, selected_frames in EXPERIMENTS.items():
+        if not selected_frames:
+            print(f"[WARN] Empty frame list for {sequence}, skipping")
+            continue
+
+        selected_str = ",".join(str(v) for v in selected_frames)
+        log_header(f"Sequence: {sequence} | Selected Frames: {selected_str}")
+
+        for baseline in selected_baselines:
+            runner = BASELINE_RUNNERS[baseline]
             log_header(f"{baseline.upper()} | {sequence}")
-            baseline_start = int(time.time())
-
+            step_start = time.time()
             try:
-                BASELINE_RUNNERS[baseline](sequence, frame_ids_csv, args.dry_run)
+                runner(sequence, selected_frames, args.dry_run)
             except subprocess.CalledProcessError as exc:
-                print(f"WARNING: {baseline} failed for {sequence} (exit {exc.returncode})")
+                print(
+                    f"WARNING: {baseline} failed for {sequence} "
+                    f"(exit {exc.returncode})"
+                )
                 failed_runs.append((baseline, sequence))
-            except Exception as exc:
-                print(f"WARNING: {baseline} failed for {sequence} ({exc})")
-                failed_runs.append((baseline, sequence))
+            elapsed = int(time.time() - step_start)
+            print(f"  {baseline.upper()} | {sequence} completed in {elapsed}s")
 
-            baseline_end = int(time.time())
-            print(f"  {baseline.upper()} | {sequence} completed in {baseline_end - baseline_start}s")
-
-    script_end = int(time.time())
-    elapsed = script_end - script_start
-
+    total_sec = int(time.time() - run_start)
     log_header("All experiments complete!")
     print(f"  Finished:      {timestamp()}")
-    print(f"  Total time:    {format_duration(elapsed)}")
+    print(f"  Total time:    {total_sec // 3600}h {(total_sec % 3600) // 60}m {total_sec % 60}s")
 
     if failed_runs:
         print("")
@@ -374,10 +456,14 @@ def main() -> None:
 
     print("")
     print("  Output locations:")
-    for sequence in EXPERIMENTS:
-        for baseline in BASELINES:
-            output_folder = get_output_folder(baseline, sequence)
-            print(f"    {baseline} | {sequence}: {output_folder}")
+    for sequence, selected_frames in EXPERIMENTS.items():
+        for baseline in selected_baselines:
+            for out in get_expected_output_folders(
+                baseline,
+                sequence,
+                selected_frames,
+            ):
+                print(f"    {baseline} | {sequence}: {out}")
     print("=" * 70)
 
 

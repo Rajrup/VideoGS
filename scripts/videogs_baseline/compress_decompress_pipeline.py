@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# pyright: reportMissingImports=false
 """
 VideoGS Combined Compress + Decompress Pipeline (no intermediate PNG).
 
@@ -17,17 +18,20 @@ import csv
 import json
 import time
 import argparse
-import subprocess
 import numpy as np
-from tqdm import tqdm
+import subprocess
 from plyfile import PlyData
+from tqdm import tqdm
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _VIDEOGS_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))
 _VIDEOGS_COMPRESSION = os.path.join(_VIDEOGS_ROOT, "compression")
+_BACKUP_DIR = os.path.join(_THIS_DIR, "backup")
 
 if _VIDEOGS_COMPRESSION not in sys.path:
     sys.path.insert(0, _VIDEOGS_COMPRESSION)
+if _BACKUP_DIR not in sys.path:
+    sys.path.insert(0, _BACKUP_DIR)
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
@@ -39,70 +43,31 @@ from compress_decompress import (
     decode_channel_raw,
     build_channel_qp_map,
 )
-
-
-def get_ply_matrix(file_path):
-    plydata = PlyData.read(file_path)
-    vertex = plydata["vertex"]
-    float_names = [p.name for p in vertex.properties if p.name != "vertex_id"]
-    num_vertices = len(vertex)
-    data_matrix = np.zeros((num_vertices, len(float_names)), dtype=np.float32)
-    for i, name in enumerate(float_names):
-        data_matrix[:, i] = vertex[name]
-
-    n_float = len(float_names) - 3
-    uncompressed_size_bytes = num_vertices * n_float * np.dtype(np.float32).itemsize
-    return data_matrix, uncompressed_size_bytes
-
-
-def searchForMaxIteration(folder):
-    saved_iters = [
-        int(fname.split("_")[-1])
-        for fname in os.listdir(folder)
-        if fname.startswith("iteration_") and fname.split("_")[-1].isdigit()
-    ]
-    if not saved_iters:
-        raise FileNotFoundError(f"No iteration_* folders found in: {folder}")
-    return max(saved_iters)
-
-
-def save_ply(data, output_file, sh_degree):
-    n, k = data.shape
-    attribute_names = ["x", "y", "z", "nx", "ny", "nz"]
-    for i in range(3):
-        attribute_names.append(f"f_dc_{i}")
-
-    n_rest = k - 17
-    for i in range(n_rest):
-        attribute_names.append(f"f_rest_{i}")
-
-    attribute_names.append("opacity")
-    for i in range(3):
-        attribute_names.append(f"scale_{i}")
-    for i in range(4):
-        attribute_names.append(f"rot_{i}")
-
-    assert k == len(attribute_names), (
-        f"Shape mismatch: data has {k} cols, expected {len(attribute_names)}"
-    )
-
-    with open(output_file, "wb") as ply_file:
-        ply_file.write(b"ply\n")
-        ply_file.write(b"format binary_little_endian 1.0\n")
-        ply_file.write(b"element vertex %d\n" % n)
-        for attribute_name in attribute_names:
-            ply_file.write(b"property float %s\n" % attribute_name.encode())
-        ply_file.write(b"end_header\n")
-
-        for i in range(n):
-            vertex_data = data[i].astype(np.float32).tobytes()
-            ply_file.write(vertex_data)
+from compress_to_png_full_sh import get_ply_matrix
+from decompress_from_png_full_sh import save_ply
 
 CAPPED_QP = 22
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+
+def find_videogs_ply_path(ply_root: str, frame: int) -> str | None:
+    ckpt_path = os.path.join(ply_root, str(frame), "point_cloud")
+    if not os.path.exists(ckpt_path):
+        return None
+
+    iter_dirs = [
+        name
+        for name in os.listdir(ckpt_path)
+        if name.startswith("iteration_") and name.split("_")[-1].isdigit()
+    ]
+    if not iter_dirs:
+        return None
+
+    max_iter = max(int(name.split("_")[-1]) for name in iter_dirs)
+    ply_path = os.path.join(ckpt_path, f"iteration_{max_iter}", "point_cloud.ply")
+    if not os.path.exists(ply_path):
+        return None
+    return ply_path
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -118,8 +83,6 @@ if __name__ == "__main__":
     parser.add_argument("--frame_end", type=int, default=200)
     parser.add_argument("--group_size", type=int, default=20)
     parser.add_argument("--interval", type=int, default=1)
-    parser.add_argument("--frame_ids", type=str, default=None,
-                        help="Comma-separated frame IDs (overrides --frame_start/--frame_end/--interval)")
     parser.add_argument("--sh_degree", type=int, default=3)
     parser.add_argument("--qp", type=int, default=25,
                         help="H.264 QP (0=lossless, 51=worst). Default: 25")
@@ -135,20 +98,8 @@ if __name__ == "__main__":
     group_info_json = {}
     benchmark_rows = []
 
-    # --- Resolve frame list and build groups ---
-    if args.frame_ids is not None:
-        all_frames = sorted(int(x.strip()) for x in args.frame_ids.split(","))
-        frame_groups = [
-            list(range(f, f + args.group_size))
-            for f in all_frames
-        ]
-    else:
-        all_frames = list(range(args.frame_start, args.frame_end, args.interval))
-        frame_groups = [
-            all_frames[i:i + args.group_size]
-            for i in range(0, len(all_frames), args.group_size)
-        ]
-    num_groups = len(frame_groups)
+    num_frames_total = args.frame_end - args.frame_start
+    num_groups = (num_frames_total + args.group_size - 1) // args.group_size
 
     capped_qp = min(args.qp, CAPPED_QP)
     print("=" * 70)
@@ -157,11 +108,8 @@ if __name__ == "__main__":
     print(f"  PLY path:       {args.ply_path}")
     print(f"  Output folder:  {args.output_folder}")
     print(f"  Output PLY:     {args.output_ply_folder}")
-    if args.frame_ids is not None:
-        print(f"  Frames:         {all_frames}")
-    else:
-        print(f"  Frames:         {args.frame_start} to {args.frame_end} "
-              f"(interval={args.interval})")
+    print(f"  Frames:         {args.frame_start} to {args.frame_end - 1} "
+          f"(interval={args.interval})")
     print(f"  Group size:     {args.group_size}")
     print(f"  SH degree:      {args.sh_degree}")
     print(f"  Groups:         {num_groups}")
@@ -179,9 +127,13 @@ if __name__ == "__main__":
     print(f"  Rotation:       {channel_qp_map[ch_offset + 4]}")
     print("=" * 70)
 
-    for group_idx, frames in enumerate(tqdm(frame_groups, desc="Groups")):
-        g_frame_start = frames[0]
-        g_frame_end = frames[-1]
+    for group_idx in tqdm(range(num_groups), desc="Groups"):
+        g_frame_start = group_idx * args.group_size + args.frame_start
+        g_frame_end = min(
+            (group_idx + 1) * args.group_size + args.frame_start,
+            args.frame_end,
+        )
+        frames = list(range(g_frame_start, g_frame_end, args.interval))
         if not frames:
             continue
 
@@ -190,47 +142,41 @@ if __name__ == "__main__":
                 group_idx * args.group_size,
                 (group_idx + 1) * args.group_size - 1,
             ],
-            "name_index": [g_frame_start, g_frame_end],
+            "name_index": [g_frame_start, g_frame_end - 1],
         }
 
         group_video_dir = os.path.join(video_folder, f"group{group_idx}")
         os.makedirs(group_video_dir, exist_ok=True)
 
-        # ==================================================================
-        # COMPRESS — Phase 1: Read PLY + Quantize
-        # ==================================================================
         quantized = {}
         quantize_ms = {}
         frame_meta = {}
-        frame_image_size = {}
-        image_size = None
+
+        group_max_points = 0
+        for frame in frames:
+            ply_path = find_videogs_ply_path(args.ply_path, frame)
+            if ply_path is not None:
+                _pd = PlyData.read(ply_path)
+                group_max_points = max(group_max_points, len(_pd["vertex"]))
+        if group_max_points <= 0:
+            continue
+        image_size = calculate_image_size(group_max_points)
 
         for frame in frames:
-            ckpt_path = os.path.join(args.ply_path, str(frame), "point_cloud")
-            if not os.path.exists(ckpt_path):
-                tqdm.write(f"Warning: checkpoint not found: {ckpt_path}")
+            ply_file = find_videogs_ply_path(args.ply_path, frame)
+            if ply_file is None:
+                tqdm.write(f"Warning: PLY not found for frame {frame}")
                 continue
-            max_iter = searchForMaxIteration(ckpt_path)
-            ply_file = os.path.join(
-                ckpt_path, f"iteration_{max_iter}", "point_cloud.ply"
-            )
 
             current_data, uncompressed_size = get_ply_matrix(ply_file)
             num_points = current_data.shape[0]
 
             t0 = time.perf_counter()
-            img_sz = calculate_image_size(num_points)
-            images, frame_min_max = quantize_videogs_image(current_data, img_sz)
+            images, frame_min_max = quantize_videogs_image(current_data, image_size)
             t1 = time.perf_counter()
-
-            if image_size is None:
-                image_size = img_sz
-            else:
-                image_size = max(image_size, img_sz)
 
             quantized[frame] = images
             quantize_ms[frame] = (t1 - t0) * 1000.0
-            frame_image_size[frame] = img_sz
             frame_meta[frame] = {
                 "num_points": num_points,
                 "uncompressed_size": uncompressed_size,
@@ -245,25 +191,8 @@ if __name__ == "__main__":
         valid_frames = [f for f in frames if f in quantized]
         if not valid_frames:
             continue
+        anchor_frame = valid_frames[0]
 
-        if image_size is None:
-            continue
-
-        # Pad all channel images in this GOP to a shared square size so ffmpeg
-        # can encode a single video stream per channel across frames.
-        for frame in valid_frames:
-            src_size = frame_image_size[frame]
-            if src_size == image_size:
-                continue
-            for ch in quantized[frame]:
-                src = quantized[frame][ch]
-                padded = np.zeros((image_size, image_size), dtype=src.dtype)
-                padded[:src_size, :src_size] = src
-                quantized[frame][ch] = padded
-
-        # ==================================================================
-        # COMPRESS — Phase 2: Encode channels via raw-video pipe
-        # ==================================================================
         channels = sorted(
             {int(k) for imgs in quantized.values() for k in imgs.keys()}
         )
@@ -292,9 +221,6 @@ if __name__ == "__main__":
 
         del quantized
 
-        # ==================================================================
-        # DECOMPRESS — Phase 3: Decode channels via raw-video pipe
-        # ==================================================================
         decoded_images = {f: {} for f in valid_frames}
 
         t_dec_start = time.perf_counter()
@@ -306,9 +232,6 @@ if __name__ == "__main__":
         t_dec_end = time.perf_counter()
         group_decode_ms = (t_dec_end - t_dec_start) * 1000
 
-        # ==================================================================
-        # DECOMPRESS — Phase 4: Dequantize + Save PLY
-        # ==================================================================
         encode_ms_per_frame = group_encode_ms / len(valid_frames)
         decode_ms_per_frame = group_decode_ms / len(valid_frames)
         compressed_per_frame = group_compressed_bytes / len(valid_frames)
@@ -320,6 +243,7 @@ if __name__ == "__main__":
             )
             t1 = time.perf_counter()
             dequantize_ms = (t1 - t0) * 1000
+            attributed_compressed_bytes = int(compressed_per_frame)
 
             frame_ply_dir = os.path.join(
                 args.output_ply_folder, str(frame), "point_cloud"
@@ -333,6 +257,7 @@ if __name__ == "__main__":
 
             benchmark_rows.append({
                 "frame": frame,
+                "is_anchor_frame": int(frame == anchor_frame),
                 "quantize_ms": quantize_ms[frame],
                 "encode_ms": encode_ms_per_frame,
                 "decode_ms": decode_ms_per_frame,
@@ -340,7 +265,9 @@ if __name__ == "__main__":
                 "total_encode_ms": quantize_ms[frame] + encode_ms_per_frame,
                 "total_decode_ms": decode_ms_per_frame + dequantize_ms,
                 "uncompressed_size_bytes": frame_meta[frame]["uncompressed_size"],
-                "compressed_size_bytes": int(compressed_per_frame),
+                "compressed_size_bytes": attributed_compressed_bytes,
+                "compressed_size_gop_avg_bytes": int(compressed_per_frame),
+                "compressed_size_gop_total_bytes": int(group_compressed_bytes),
                 "original_points": frame_meta[frame]["num_points"],
             })
 
@@ -348,14 +275,11 @@ if __name__ == "__main__":
                 f"  Frame {frame}: N={frame_meta[frame]['num_points']}, "
                 f"enc={quantize_ms[frame] + encode_ms_per_frame:.1f} ms, "
                 f"dec={decode_ms_per_frame + dequantize_ms:.1f} ms, "
-                f"comp={compressed_per_frame / 1024 / 1024:.2f} MB"
+                f"comp(attr_gop_avg)={attributed_compressed_bytes / 1024 / 1024:.2f} MB"
             )
 
         del decoded_images
 
-    # ------------------------------------------------------------------
-    # Save metadata
-    # ------------------------------------------------------------------
     with open(os.path.join(args.output_folder, "min_max.json"), "w") as f:
         json.dump(min_max_json, f, indent=4)
     with open(os.path.join(args.output_folder, "group_info.json"), "w") as f:
@@ -363,8 +287,10 @@ if __name__ == "__main__":
 
     config_out = {
         "ply_path": args.ply_path,
-        "frame_list": [int(f) for f in all_frames],
+        "frame_start": args.frame_start,
+        "frame_end": args.frame_end,
         "group_size": args.group_size,
+        "interval": args.interval,
         "sh_degree": args.sh_degree,
         "qp": args.qp,
         "channel_qp_map": {str(k): v for k, v in sorted(channel_qp_map.items())},
@@ -372,9 +298,6 @@ if __name__ == "__main__":
     with open(os.path.join(args.output_folder, "videogs_config.json"), "w") as f:
         json.dump(config_out, f, indent=4)
 
-    # ------------------------------------------------------------------
-    # Benchmark CSV + summary
-    # ------------------------------------------------------------------
     if benchmark_rows:
         csv_path = os.path.join(args.output_folder, "benchmark_videogs_pipeline.csv")
         with open(csv_path, "w", newline="") as f:
@@ -383,6 +306,8 @@ if __name__ == "__main__":
                 "frame_id", "quantize_ms", "encode_ms", "decode_ms",
                 "dequantize_ms", "total_encode_ms", "total_decode_ms",
                 "uncompressed_size_bytes", "compressed_size_bytes",
+                "compressed_size_gop_avg_bytes", "compressed_size_gop_total_bytes",
+                "is_anchor_frame",
                 "original_points",
             ])
             for r in benchmark_rows:
@@ -396,6 +321,9 @@ if __name__ == "__main__":
                     f"{r['total_decode_ms']:.2f}",
                     r["uncompressed_size_bytes"],
                     r["compressed_size_bytes"],
+                    r["compressed_size_gop_avg_bytes"],
+                    r["compressed_size_gop_total_bytes"],
+                    r["is_anchor_frame"],
                     r["original_points"],
                 ])
 
