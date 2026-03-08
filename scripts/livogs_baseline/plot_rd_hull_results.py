@@ -19,11 +19,11 @@ RD_OUTPUT_ROOTS: list[dict[str, Any]] = [
     #     "frame_ids": [0],
     # },
     # {
-    #     "path": "/synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor3_Violin/compression/livogs_rd_nvcomp",
+    #     "path": "/synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor2_Dancing/compression/livogs_rd_nvcomp",
     #     "frame_ids": [0],
     # },
     # {
-    #     "path": "/synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor2_Dancing/compression/livogs_rd_nvcomp",
+    #     "path": "/synology/rajrup/VideoGS/train_output/HiFi4G_Dataset/4K_Actor3_Violin/compression/livogs_rd_nvcomp",
     #     "frame_ids": [0],
     # },
     # {
