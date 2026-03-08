@@ -17,10 +17,10 @@ Standalone usage::
 """
 
 import argparse
-import importlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 
 # -- config + sibling imports (before any CUDA imports) -----------------------
@@ -177,30 +177,38 @@ def main() -> None:
         nvcomp_algorithm=nvcomp_algorithm,
     )
 
-    # --- Step 2: Evaluate Decompression Quality (direct call) ----------------
     if args.disable_evaluation:
         print("[INFO] --disable_evaluation: skipping quality evaluation.")
     else:
         print(f"\n{sep}\nStep 2: Evaluate Decompression Quality\n{sep}")
-        evaluate_decompression_quality = importlib.import_module(
-            "evaluate_decompress"
-        ).evaluate_decompression_quality
-        eval_args = argparse.Namespace(
-            gt_ply_path=gt_model_path,
-            decompressed_ply_path=os.path.join(output_folder, "decompressed_ply"),
-            dataset_path=dataset_path,
-            output_render_path=os.path.join(output_folder, "evaluation"),
-            save_renders=args.save_renders,
-            sh_degree=args.sh_degree,
-            resolution=args.resolution,
-            white_background=True,
-            no_white_background=False,
-            llffhold=8,
-            frame_start=args.frame_start,
-            frame_end=args.frame_end,
-            interval=args.interval,
+        eval_script = os.path.join(config.SCRIPTS_DIR, "evaluate_decompress.py")
+        eval_cmd = [
+            sys.executable,
+            eval_script,
+            "--gt_ply_path", gt_model_path,
+            "--decompressed_ply_path", os.path.join(output_folder, "decompressed_ply"),
+            "--dataset_path", dataset_path,
+            "--sh_degree", str(args.sh_degree),
+            "--resolution", str(args.resolution),
+            "--llffhold", "8",
+            "--white_background",
+            "--frame_start", str(args.frame_start),
+            "--frame_end", str(args.frame_end),
+            "--interval", str(args.interval),
+        ]
+
+        if args.save_renders:
+            eval_cmd.extend([
+                "--save_renders",
+                "--output_render_path", os.path.join(output_folder, "evaluation"),
+            ])
+
+        subprocess.run(
+            eval_cmd,
+            cwd=config.VIDEOGS_ROOT,
+            check=True,
+            env=os.environ.copy(),
         )
-        evaluate_decompression_quality(eval_args)
 
     print(f"\n{sep}")
     print(f"Done!  Results in: {output_folder}")
