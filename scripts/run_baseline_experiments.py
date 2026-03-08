@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass
@@ -29,6 +30,7 @@ BASELINE_ENVS: dict[str, str] = {
 BASELINES = list(BASELINE_ENVS.keys())
 EVALUATION_ENV = "videogs"
 CUDA_DEVICE = "0"
+SKIP_EXISTING = True
 
 DATASET_NAME = "HiFi4G_Dataset"
 DATA_PATH = "/synology/rajrup/VideoGS"
@@ -41,18 +43,23 @@ DRACOGS_ET = 16
 DRACOGS_ES = 16
 DRACOGS_CL = 10
 
-VIDEOGS_QPS = [0, 4, 10, 15, 20, 25]
+VIDEOGS_QPS = [25]
 VIDEOGS_GROUP_SIZE = 20
 
-EXPERIMENTS: dict[str, list[int]] = {
-    "4K_Actor1_Greeting": [0],
-    "4K_Actor2_Dancing": [0],
-    "4K_Actor3_Violin": [0],
-    "4K_Actor4_Dancing": [0],
-    "4K_Actor5_Oil-paper_Umbrella": [0],
-    "4K_Actor6_Changing_Clothes": [0],
-    "4K_Actor7_Nunchaku": [0],
+BASELINE_FRAME_IDS: dict[str, list[int]] = {
+    "dracogs": list(range(1, 201, 10)),
+    "mesongs": list(range(1, 201, 10)),
+    "videogs": list(range(1, 201, 20)),
 }
+SEQUENCES: list[str] = [
+    "4K_Actor1_Greeting",
+    "4K_Actor2_Dancing",
+    "4K_Actor3_Violin",
+    "4K_Actor4_Dancing",
+    "4K_Actor5_Oil-paper_Umbrella",
+    "4K_Actor6_Changing_Clothes",
+    "4K_Actor7_Nunchaku",
+]
 
 
 SCRIPT_PATH = Path(__file__).resolve()
@@ -97,6 +104,19 @@ def run_cmd(cmd: list[str], cwd: Path, dry_run: bool) -> None:
 
 def conda_python_cmd(env_name: str, script_path: Path, args: list[str]) -> list[str]:
     return ["conda", "run", "-n", env_name, "python", str(script_path), *args]
+
+
+def _output_complete(output_folder: str) -> bool:
+    """Return True if the evaluation directory already exists (run completed)."""
+    return Path(output_folder, "evaluation").is_dir()
+
+
+def _cleanup_partial(output_folder: str) -> None:
+    """Remove a partially-generated output folder so it won't block future reruns."""
+    p = Path(output_folder)
+    if p.exists():
+        log_step(f"Cleaning up partial output: {output_folder}")
+        shutil.rmtree(p)
 
 
 def get_available_conda_envs() -> set[str]:
@@ -219,9 +239,12 @@ def run_evaluation(
     run_cmd(cmd, cwd=VIDEOGS_ROOT, dry_run=dry_run)
 
 
-def run_dracogs(sequence: str, selected_frames: list[int], dry_run: bool) -> None:
+def run_dracogs(sequence: str, selected_frames: list[int], dry_run: bool, skip_existing: bool) -> None:
     frame_start, frame_end, interval = selected_to_span(selected_frames)
     paths = get_paths(sequence, "dracogs", frame_start, frame_end, interval)
+    if skip_existing and _output_complete(paths.output_folder):
+        log_step(f"SKIP (exists) DracoGS | {sequence} | frames: {frame_start}-{frame_end - 1}:{interval}")
+        return
     log_step(
         f"DracoGS | {sequence} | frames: {frame_start}-{frame_end - 1}:{interval} | {timestamp()}"
     )
@@ -258,13 +281,20 @@ def run_dracogs(sequence: str, selected_frames: list[int], dry_run: bool) -> Non
             str(DRACOGS_CL),
         ],
     )
-    run_cmd(cmd, cwd=VIDEOGS_ROOT, dry_run=dry_run)
-    run_evaluation(paths, frame_start, frame_end, interval, dry_run)
+    try:
+        run_cmd(cmd, cwd=VIDEOGS_ROOT, dry_run=dry_run)
+        run_evaluation(paths, frame_start, frame_end, interval, dry_run)
+    except subprocess.CalledProcessError:
+        _cleanup_partial(paths.output_folder)
+        raise
 
 
-def run_mesongs(sequence: str, selected_frames: list[int], dry_run: bool) -> None:
+def run_mesongs(sequence: str, selected_frames: list[int], dry_run: bool, skip_existing: bool) -> None:
     frame_start, frame_end, interval = selected_to_span(selected_frames)
     paths = get_paths(sequence, "mesongs", frame_start, frame_end, interval)
+    if skip_existing and _output_complete(paths.output_folder):
+        log_step(f"SKIP (exists) MesonGS | {sequence} | frames: {frame_start}-{frame_end - 1}:{interval}")
+        return
     log_step(
         f"MesonGS | {sequence} | frames: {frame_start}-{frame_end - 1}:{interval} | {timestamp()}"
     )
@@ -295,11 +325,15 @@ def run_mesongs(sequence: str, selected_frames: list[int], dry_run: bool) -> Non
             sequence,
         ],
     )
-    run_cmd(cmd, cwd=MESONGS_ROOT, dry_run=dry_run)
-    run_evaluation(paths, frame_start, frame_end, interval, dry_run)
+    try:
+        run_cmd(cmd, cwd=MESONGS_ROOT, dry_run=dry_run)
+        run_evaluation(paths, frame_start, frame_end, interval, dry_run)
+    except subprocess.CalledProcessError:
+        _cleanup_partial(paths.output_folder)
+        raise
 
 
-def run_videogs(sequence: str, selected_frames: list[int], dry_run: bool) -> None:
+def run_videogs(sequence: str, selected_frames: list[int], dry_run: bool, skip_existing: bool) -> None:
     for anchor_frame in sorted(set(int(v) for v in selected_frames)):
         gop_start = anchor_frame
         gop_end = anchor_frame + VIDEOGS_GROUP_SIZE
@@ -312,6 +346,12 @@ def run_videogs(sequence: str, selected_frames: list[int], dry_run: bool) -> Non
                 1,
                 videogs_qp=qp,
             )
+            if skip_existing and _output_complete(paths.output_folder):
+                log_step(
+                    f"SKIP (exists) VideoGS | {sequence} | QP: {qp} | "
+                    f"anchor: {anchor_frame} | frames: {gop_start}-{gop_end - 1}:1"
+                )
+                continue
             log_step(
                 f"VideoGS | {sequence} | QP: {qp} | "
                 f"anchor: {anchor_frame} | frames: {gop_start}-{gop_end - 1}:1 | {timestamp()}"
@@ -341,8 +381,12 @@ def run_videogs(sequence: str, selected_frames: list[int], dry_run: bool) -> Non
                     str(qp),
                 ],
             )
-            run_cmd(cmd, cwd=VIDEOGS_ROOT, dry_run=dry_run)
-            run_evaluation(paths, gop_start, gop_end, 1, dry_run)
+            try:
+                run_cmd(cmd, cwd=VIDEOGS_ROOT, dry_run=dry_run)
+                run_evaluation(paths, gop_start, gop_end, 1, dry_run)
+            except subprocess.CalledProcessError:
+                _cleanup_partial(paths.output_folder)
+                raise
 
 
 def get_expected_output_folders(
@@ -372,7 +416,7 @@ def get_expected_output_folders(
     return [get_output_folder(baseline, sequence, frame_start, frame_end, interval)]
 
 
-BASELINE_RUNNERS: dict[str, Callable[[str, list[int], bool], None]] = {
+BASELINE_RUNNERS: dict[str, Callable[[str, list[int], bool, bool], None]] = {
     "dracogs": run_dracogs,
     "mesongs": run_mesongs,
     "videogs": run_videogs,
@@ -382,6 +426,7 @@ BASELINE_RUNNERS: dict[str, Callable[[str, list[int], bool], None]] = {
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run selected baseline experiments for VideoGS")
     parser.add_argument("--dry-run", action="store_true", help="Print commands without executing")
+    parser.add_argument("--skip-existing", action=argparse.BooleanOptionalAction, default=SKIP_EXISTING, help="Skip runs whose evaluation output already exists (default: %(default)s)")
     parser.add_argument(
         "--baselines",
         nargs="+",
@@ -407,31 +452,30 @@ def main() -> None:
     print(f"  Started:    {timestamp()}")
     print(f"  Dataset:    {DATASET_NAME}")
     print(f"  Baselines:  {', '.join(selected_baselines)}")
-    print(f"  Sequences:  {len(EXPERIMENTS)}")
+    print(f"  Sequences:  {len(SEQUENCES)}")
     print(f"  Resolution: {RESOLUTION}")
     print(f"  SH degree:  {SH_DEGREE}")
     print(f"  CUDA:       {CUDA_DEVICE}")
     print(f"  Data path:  {DATA_PATH}")
     if args.dry_run:
         print("  Mode:       DRY RUN")
+    if args.skip_existing:
+        print("  Skip:       existing outputs")
     print("=" * 70)
 
     failed_runs: list[tuple[str, str]] = []
 
-    for sequence, selected_frames in EXPERIMENTS.items():
-        if not selected_frames:
-            print(f"[WARN] Empty frame list for {sequence}, skipping")
-            continue
-
-        selected_str = ",".join(str(v) for v in selected_frames)
-        log_header(f"Sequence: {sequence} | Selected Frames: {selected_str}")
+    for sequence in SEQUENCES:
+        log_header(f"Sequence: {sequence}")
 
         for baseline in selected_baselines:
+            selected_frames = BASELINE_FRAME_IDS[baseline]
             runner = BASELINE_RUNNERS[baseline]
-            log_header(f"{baseline.upper()} | {sequence}")
+            selected_str = ",".join(str(v) for v in selected_frames)
+            log_header(f"{baseline.upper()} | {sequence} | Frames: {selected_str}")
             step_start = time.time()
             try:
-                runner(sequence, selected_frames, args.dry_run)
+                runner(sequence, selected_frames, args.dry_run, args.skip_existing)
             except subprocess.CalledProcessError as exc:
                 print(
                     f"WARNING: {baseline} failed for {sequence} "
@@ -456,8 +500,9 @@ def main() -> None:
 
     print("")
     print("  Output locations:")
-    for sequence, selected_frames in EXPERIMENTS.items():
+    for sequence in SEQUENCES:
         for baseline in selected_baselines:
+            selected_frames = BASELINE_FRAME_IDS[baseline]
             for out in get_expected_output_folders(
                 baseline,
                 sequence,
