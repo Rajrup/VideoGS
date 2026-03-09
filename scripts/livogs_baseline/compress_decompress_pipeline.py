@@ -303,6 +303,9 @@ if __name__ == "__main__":
 
         if params['colors'].shape[1] > target_sh_channels:
             params['colors'] = params['colors'][:, :target_sh_channels]
+            uncompressed_size_bytes = sum(
+                v.numel() * v.element_size() for v in params.values()
+            )
 
         N_original = params['means'].shape[0]
 
