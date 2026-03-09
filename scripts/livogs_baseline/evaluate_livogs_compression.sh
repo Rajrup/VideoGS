@@ -23,11 +23,11 @@ INTERVAL=1
 SH_DEGREE=3
 
 # LiVoGS compression parameters
-J=15                    # Octree depth for voxelization
+J=12                    # Octree depth for voxelization
 QUANTIZE_STEP=0.0001      # Uniform quantization step
 SH_COLOR_SPACE="klt"    # Color space: rgb, yuv, klt
 RLGR_BLOCK_SIZE=4096    # RLGR parallel block size
-NVCOMP_ALGORITHM="None"  # nvCOMP algorithm for position compression (None to disable)
+NVCOMP_ALGORITHM="ANS"  # nvCOMP algorithm for position compression (None to disable)
 
 # --- Parse named arguments ---
 while [[ $# -gt 0 ]]; do

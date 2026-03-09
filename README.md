@@ -22,6 +22,9 @@ pip install -r requirements.txt --no-build-isolation
 pip install submodules/diff-gaussian-rasterization --no-build-isolation # Only pytorch 2.4 with CUDA 12.1 worked. Other versions resulted in compilation errors.
 pip install submodules/simple-knn --no-build-isolation
 
+# Other optional dependencies
+pip install pynvml psutil
+
 # External Dependencies
 # Download OptiX 7.6 from https://developer.nvidia.com/designworks/optix/downloads/legacy
 sh NVIDIA-OptiX-SDK-7.6.0-linux64-x86_64.sh

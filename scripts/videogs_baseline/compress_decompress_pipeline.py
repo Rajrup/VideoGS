@@ -77,8 +77,8 @@ if __name__ == "__main__":
                         help="Checkpoint dir with frame folders (0, 1, ...)")
     parser.add_argument("--output_folder", type=str, required=True,
                         help="Output for compressed videos, metadata, benchmark CSV")
-    parser.add_argument("--output_ply_folder", type=str, required=True,
-                        help="Output for decompressed PLY files")
+    parser.add_argument("--output_ply_folder", type=str, default=None,
+                        help="Output for decompressed PLY files (omit to skip saving)")
     parser.add_argument("--frame_start", type=int, default=0)
     parser.add_argument("--frame_end", type=int, default=200)
     parser.add_argument("--group_size", type=int, default=20)
@@ -90,7 +90,8 @@ if __name__ == "__main__":
 
     video_folder = os.path.join(args.output_folder, "compressed_video")
     os.makedirs(video_folder, exist_ok=True)
-    os.makedirs(args.output_ply_folder, exist_ok=True)
+    if args.output_ply_folder is not None:
+        os.makedirs(args.output_ply_folder, exist_ok=True)
 
     channel_qp_map = build_channel_qp_map(args.sh_degree, args.qp)
 
@@ -107,7 +108,7 @@ if __name__ == "__main__":
     print("=" * 70)
     print(f"  PLY path:       {args.ply_path}")
     print(f"  Output folder:  {args.output_folder}")
-    print(f"  Output PLY:     {args.output_ply_folder}")
+    print(f"  Output PLY:     {args.output_ply_folder or '(skip)'}")
     print(f"  Frames:         {args.frame_start} to {args.frame_end - 1} "
           f"(interval={args.interval})")
     print(f"  Group size:     {args.group_size}")
@@ -245,15 +246,16 @@ if __name__ == "__main__":
             dequantize_ms = (t1 - t0) * 1000
             attributed_compressed_bytes = int(compressed_per_frame)
 
-            frame_ply_dir = os.path.join(
-                args.output_ply_folder, str(frame), "point_cloud"
-            )
-            os.makedirs(frame_ply_dir, exist_ok=True)
-            save_ply(
-                ply_data,
-                os.path.join(frame_ply_dir, "point_cloud.ply"),
-                args.sh_degree,
-            )
+            if args.output_ply_folder is not None:
+                frame_ply_dir = os.path.join(
+                    args.output_ply_folder, str(frame), "point_cloud"
+                )
+                os.makedirs(frame_ply_dir, exist_ok=True)
+                save_ply(
+                    ply_data,
+                    os.path.join(frame_ply_dir, "point_cloud.ply"),
+                    args.sh_degree,
+                )
 
             benchmark_rows.append({
                 "frame": frame,
