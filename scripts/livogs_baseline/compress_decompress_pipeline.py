@@ -174,8 +174,8 @@ if __name__ == "__main__":
                         help="Path to checkpoint dir containing frame folders (0, 1, ...)")
     parser.add_argument("--output_folder", type=str, required=True,
                         help="Folder for benchmark CSV and metadata")
-    parser.add_argument("--output_ply_folder", type=str, required=True,
-                        help="Folder for decompressed PLY output")
+    parser.add_argument("--output_ply_folder", type=str, default=None,
+                        help="Folder for decompressed PLY output (omit to skip saving)")
     parser.add_argument("--frame_start", type=int, default=0)
     parser.add_argument("--frame_end", type=int, default=200)
     parser.add_argument("--interval", type=int, default=1)
@@ -235,7 +235,8 @@ if __name__ == "__main__":
         device_id = torch.cuda.current_device() if torch.cuda.is_available() else 0
 
     os.makedirs(args.output_folder, exist_ok=True)
-    os.makedirs(args.output_ply_folder, exist_ok=True)
+    if args.output_ply_folder is not None:
+        os.makedirs(args.output_ply_folder, exist_ok=True)
 
     # Print configuration
     print("=" * 70)
@@ -243,7 +244,7 @@ if __name__ == "__main__":
     print("=" * 70)
     print(f"  PLY path:           {args.ply_path}")
     print(f"  Output folder:      {args.output_folder}")
-    print(f"  Output PLY folder:  {args.output_ply_folder}")
+    print(f"  Output PLY folder:  {args.output_ply_folder or '(skip)'}")
     print(f"  Frames:             {args.frame_start} to {args.frame_end} (interval={args.interval})")
     print(f"  SH degree:          {args.sh_degree}")
     print(f"  Device:             {device}")
@@ -329,15 +330,16 @@ if __name__ == "__main__":
         decode_time_ms = (t_dec_end - t_dec_start) * 1000
 
         # --- 4. Save PLY (not timed) ---
-        frame_ply_folder = os.path.join(args.output_ply_folder, str(frame), "point_cloud")
-        os.makedirs(frame_ply_folder, exist_ok=True)
-        ply_out_path = os.path.join(frame_ply_folder, "point_cloud.ply")
-        save_videogs_ply(decoded_params, ply_out_path, args.sh_degree)
+        if args.output_ply_folder is not None:
+            frame_ply_folder = os.path.join(args.output_ply_folder, str(frame), "point_cloud")
+            os.makedirs(frame_ply_folder, exist_ok=True)
+            ply_out_path = os.path.join(frame_ply_folder, "point_cloud.ply")
+            save_videogs_ply(decoded_params, ply_out_path, args.sh_degree)
 
         benchmark_rows.append({
             "frame": frame,
-            "encode_time_ms": encode_time_ms,
-            "decode_time_ms": decode_time_ms,
+            "total_encode_ms": encode_time_ms,
+            "total_decode_ms": decode_time_ms,
             "original_points": N_original,
             "voxelized_points": Nvox,
             "uncompressed_size_bytes": uncompressed_size_bytes,
@@ -365,7 +367,7 @@ if __name__ == "__main__":
         with open(csv_path, "w", newline="") as f:
             w = csv.writer(f)
             per_ch_cols = _per_channel_column_names(len(benchmark_rows[0]["per_channel_compressed_bytes"]))
-            w.writerow(["frame_id", "encode_time_ms", "decode_time_ms",
+            w.writerow(["frame_id", "total_encode_ms", "total_decode_ms",
                 "original_points", "voxelized_points",
                 "uncompressed_size_bytes", "compressed_size_bytes",
                 "position_compressed_bytes", "attribute_compressed_bytes",
@@ -374,8 +376,8 @@ if __name__ == "__main__":
             for r in benchmark_rows:
                 w.writerow([
                     r["frame"],
-                    f"{r['encode_time_ms']:.2f}",
-                    f"{r['decode_time_ms']:.2f}",
+                    f"{r['total_encode_ms']:.2f}",
+                    f"{r['total_decode_ms']:.2f}",
                     r["original_points"],
                     r["voxelized_points"],
                     r["uncompressed_size_bytes"],
@@ -386,8 +388,8 @@ if __name__ == "__main__":
                 ])
 
         n = len(benchmark_rows)
-        total_enc_ms = sum(r["encode_time_ms"] for r in benchmark_rows)
-        total_dec_ms = sum(r["decode_time_ms"] for r in benchmark_rows)
+        total_enc_ms = sum(r["total_encode_ms"] for r in benchmark_rows)
+        total_dec_ms = sum(r["total_decode_ms"] for r in benchmark_rows)
         total_uncomp = sum(r["uncompressed_size_bytes"] for r in benchmark_rows)
         total_comp = sum(r["compressed_size_bytes"] for r in benchmark_rows)
         total_position_comp = sum(r["position_compressed_bytes"] for r in benchmark_rows)
