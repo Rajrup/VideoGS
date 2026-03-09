@@ -1,5 +1,7 @@
 results/
 scripts/baseline_comparison_res/
+scripts/rd_baselines_results/
+scripts/rd_curve_results/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

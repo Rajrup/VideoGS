@@ -19,17 +19,17 @@ import numpy as np
 
 DATASET_NAME = "HiFi4G_Dataset"
 DATA_PATH = "/synology/rajrup/VideoGS"
-VIDEOGS_QPS = [0, 4, 10, 15, 20, 25]
+VIDEOGS_QPS = [25]
 VIDEOGS_GROUP_SIZE = 20
 
 EXPERIMENTS: dict[str, list[int]] = {
-    "4K_Actor1_Greeting": [0],
-    "4K_Actor2_Dancing": [0],
-    "4K_Actor3_Violin": [0],
-    "4K_Actor4_Dancing": [0],
-    "4K_Actor5_Oil-paper_Umbrella": [0],
-    "4K_Actor6_Changing_Clothes": [0],
-    "4K_Actor7_Nunchaku": [0],
+    "4K_Actor1_Greeting": list(range(1, 201, 20)),
+    "4K_Actor2_Dancing": list(range(1, 201, 20)),
+    "4K_Actor3_Violin": list(range(1, 201, 20)),
+    "4K_Actor4_Dancing": list(range(1, 201, 20)),
+    "4K_Actor5_Oil-paper_Umbrella": list(range(1, 201, 20)),
+    "4K_Actor6_Changing_Clothes": list(range(1, 201, 20)),
+    "4K_Actor7_Nunchaku": list(range(1, 201, 20)),
 }
 
 BASELINES: dict[str, dict[str, Any]] = {
