@@ -8,6 +8,7 @@
 [submodule "LiVoGS"]
 	path = LiVoGS
 	url = git@github.com:haodongw101/LiVoGS.git
+	branch = jetson
 [submodule "MesonGS"]
 	path = MesonGS
 	url = https://github.com/Rajrup/MesonGS.git

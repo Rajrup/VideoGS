@@ -238,8 +238,8 @@ def evaluate_decompression_quality(args):
         update_camera_images(cameras, args.dataset_path, frame, cam_file_paths, cam_resolutions)
         t1 = time.time()
 
-        # Evaluate GT model
-        gt_gaussians = GaussianModel(args.sh_degree)
+        # Evaluate GT model (always load with degree 3, since GT PLY has full SH)
+        gt_gaussians = GaussianModel(3)
         gt_gaussians.load_ply(gt_ply_file)
         gt_metrics, gt_renders = render_and_evaluate(
             gt_gaussians, cameras, background, pipeline, psnr_metric, ssim_metric,
@@ -248,7 +248,7 @@ def evaluate_decompression_quality(args):
         del gt_gaussians
         t2 = time.time()
 
-        # Evaluate Decompressed model
+        # Evaluate Decompressed model (use target sh_degree matching compressed PLY)
         decomp_gaussians = GaussianModel(args.sh_degree)
         decomp_gaussians.load_ply(decomp_ply_file)
         decomp_metrics, decomp_renders = render_and_evaluate(

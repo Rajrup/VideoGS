@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """
-LiVoGS Compression + Decompression for VideoGS-trained Gaussian Splat Models.
+LiVoGS Compression + Optimized Decompression for VideoGS-trained Gaussian Splat Models.
+
+Same as compress_decompress_pipeline.py but uses decode_livogs_optimized()
+which eliminates redundant Morton code recomputation in the decoder.
 
 For each frame:
   1. Load PLY from VideoGS checkpoint (not timed)
-  2. encode_livogs(): Morton → Voxelize → Merge → Position encode → RAHT → Quantize → RLGR
-  3. decode_livogs(): RLGR → Dequant → Position decode → RAHT prelude → iRAHT
+  2. encode_livogs(): Morton -> Voxelize -> Merge -> Position encode -> RAHT -> Quantize -> RLGR
+  3. decode_livogs_optimized(): RLGR -> Dequant -> Position decode (V2, returns morton) -> RAHT prelude -> iRAHT
   4. save_to_ply(): Save reconstructed model to disk (not timed)
 
-The compressed bytestream stays on GPU (no GPU→CPU transfer).
+The compressed bytestream stays on GPU (no GPU->CPU transfer).
 """
 
 import os
@@ -31,10 +34,11 @@ if _VIDEOGS_ROOT not in sys.path:
 if _LIVOGS_COMPRESSION not in sys.path:
     sys.path.insert(0, _LIVOGS_COMPRESSION)
 
-from compress_decompress import encode_livogs, decode_livogs
+from compress_decompress import encode_livogs
+from compress_decompress_optimized import decode_livogs_optimized
 
 # ---------------------------------------------------------------------------
-# PLY I/O (VideoGS-compatible)
+# PLY I/O (VideoGS-compatible) -- identical to original pipeline
 # ---------------------------------------------------------------------------
 
 def searchForMaxIteration(folder):
@@ -43,15 +47,7 @@ def searchForMaxIteration(folder):
 
 
 def load_videogs_ply(ply_path, device='cuda'):
-    """Load a VideoGS-trained PLY and return LiVoGS-compatible param dict on GPU.
-
-    VideoGS PLY attribute order:
-        x, y, z, nx, ny, nz, f_dc_0..2, f_rest_0..44, opacity,
-        scale_0..2, rot_0..3
-
-    Normals (nx, ny, nz) are always zero in VideoGS and are ignored.
-    Opacities are converted from logit to [0,1], scales from log to positive.
-    """
+    """Load a VideoGS-trained PLY and return LiVoGS-compatible param dict on GPU."""
     plydata = PlyData.read(ply_path)
     vertex = plydata['vertex']
 
@@ -84,12 +80,9 @@ def load_videogs_ply(ply_path, device='cuda'):
         v.numel() * v.element_size() for v in params.values()
     )
 
-    # Normalize quaternions -> Refer to LiVoGS/compression/data_util.py
     params['quats'] = F.normalize(params['quats'], p=2, dim=1)
-    # Logit → [0, 1]
     if params['opacities'].min() < 0 or params['opacities'].max() > 1:
         params['opacities'] = torch.sigmoid(params['opacities'])
-    # Log → positive
     if params['scales'].min() < 0:
         params['scales'] = torch.exp(params['scales'])
 
@@ -97,11 +90,7 @@ def load_videogs_ply(ply_path, device='cuda'):
 
 
 def save_videogs_ply(params, output_path, sh_degree=3, eps=1e-6):
-    """Save reconstructed params back to VideoGS-compatible PLY.
-
-    Converts opacities back to logit space and scales back to log space so that
-    GaussianModel.load_ply() can consume them directly.
-    """
+    """Save reconstructed params back to VideoGS-compatible PLY."""
     means = params['means'].detach().cpu().float().numpy()
     quats = params['quats'].detach().cpu().float().numpy()
     scales = params['scales'].detach().cpu().float().numpy()
@@ -110,12 +99,10 @@ def save_videogs_ply(params, output_path, sh_degree=3, eps=1e-6):
 
     N = means.shape[0]
 
-    # Convert back to raw (logit / log) space for VideoGS compatibility
     opacities_c = np.clip(opacities, eps, 1.0 - eps)
     opacities_logit = np.log(opacities_c / (1.0 - opacities_c))
     scales_log = np.log(np.clip(scales, eps, None))
 
-    # Build attribute names matching VideoGS convention
     attr_names = ['x', 'y', 'z', 'nx', 'ny', 'nz']
     for i in range(3):
         attr_names.append(f'f_dc_{i}')
@@ -147,10 +134,6 @@ def save_videogs_ply(params, output_path, sh_degree=3, eps=1e-6):
 
 
 def _per_channel_column_names(n_channels: int) -> list[str]:
-    """Generate CSV column names for per-dimension compressed bytes.
-
-    Channel layout: quats(0:4), scales(4:7), opacity(7), sh(8:).
-    """
     names: list[str] = []
     for i in range(4):
         names.append(f"quats_dim{i}_compressed_bytes")
@@ -162,13 +145,14 @@ def _per_channel_column_names(n_channels: int) -> list[str]:
         names.append(f"sh_dim{i}_compressed_bytes")
     assert len(names) == n_channels
     return names
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="LiVoGS compress + decompress for VideoGS-trained models"
+        description="LiVoGS compress + OPTIMIZED decompress for VideoGS-trained models"
     )
     parser.add_argument("--ply_path", type=str, required=True,
                         help="Path to checkpoint dir containing frame folders (0, 1, ...)")
@@ -180,38 +164,27 @@ if __name__ == "__main__":
     parser.add_argument("--frame_end", type=int, default=200)
     parser.add_argument("--interval", type=int, default=1)
     parser.add_argument("--sh_degree", type=int, default=3)
-    # LiVoGS-specific parameters
     parser.add_argument("--J", type=int, default=15,
                         help="Octree depth for voxelization (default: 15)")
     parser.add_argument("--quantize_step", type=float, default=0.0001,
                         help="Uniform quantization step for all attributes (default: 0.0001)")
-    parser.add_argument("--quantize_step_quats", type=float, default=None,
-                        help="Override quantization step for quaternions")
-    parser.add_argument("--quantize_step_scales", type=float, default=None,
-                        help="Override quantization step for scales")
-    parser.add_argument("--quantize_step_opacity", type=float, default=None,
-                        help="Override quantization step for opacity")
-    parser.add_argument("--quantize_step_sh_dc", type=float, default=None,
-                        help="Override quantization step for SH DC")
-    parser.add_argument("--quantize_step_sh_rest", type=float, default=None,
-                        help="Override quantization step for SH rest")
+    parser.add_argument("--quantize_step_quats", type=float, default=None)
+    parser.add_argument("--quantize_step_scales", type=float, default=None)
+    parser.add_argument("--quantize_step_opacity", type=float, default=None)
+    parser.add_argument("--quantize_step_sh_dc", type=float, default=None)
+    parser.add_argument("--quantize_step_sh_rest", type=float, default=None)
     parser.add_argument("--sh_color_space", type=str, default="rgb",
-                        choices=["rgb", "yuv", "klt"],
-                        help="Color space for SH coefficients (default: rgb)")
-    parser.add_argument("--rlgr_block_size", type=int, default=4096,
-                        help="RLGR parallel block size (default: 4096)")
-    parser.add_argument("--quantize_config_json", type=str, default=None,
-                        help="Path to JSON file with full quantize_config dict (overrides all --quantize_step_* args)")
+                        choices=["rgb", "yuv", "klt"])
+    parser.add_argument("--rlgr_block_size", type=int, default=4096)
+    parser.add_argument("--quantize_config_json", type=str, default=None)
     parser.add_argument("--nvcomp_algorithm", type=str, default="ANS",
                         choices=["None", "LZ4", "Snappy", "GDeflate", "Deflate",
-                                 "zStandard", "Cascaded", "Bitcomp", "ANS"],
-                        help="nvCOMP algorithm for octree position compression (default: ANS, 'None' to disable)")
+                                 "zStandard", "Cascaded", "Bitcomp", "ANS"])
     parser.add_argument("--device", type=str, default="cuda:0")
     args = parser.parse_args()
 
     nvcomp_algorithm = None if args.nvcomp_algorithm == "None" else args.nvcomp_algorithm
 
-    # Build quantize_step dict — overridden entirely if --quantize_config_json is provided
     if args.quantize_config_json is not None:
         import json as _json
         with open(args.quantize_config_json) as _f:
@@ -238,9 +211,8 @@ if __name__ == "__main__":
     if args.output_ply_folder is not None:
         os.makedirs(args.output_ply_folder, exist_ok=True)
 
-    # Print configuration
     print("=" * 70)
-    print("LiVoGS Compress + Decompress Pipeline")
+    print("LiVoGS Compress + OPTIMIZED Decompress Pipeline")
     print("=" * 70)
     print(f"  PLY path:           {args.ply_path}")
     print(f"  Output folder:      {args.output_folder}")
@@ -254,6 +226,7 @@ if __name__ == "__main__":
     print(f"  SH color space:     {args.sh_color_space}")
     print(f"  RLGR block size:    {args.rlgr_block_size}")
     print(f"  nvCOMP algorithm:   {nvcomp_algorithm if nvcomp_algorithm else 'none'}")
+    print(f"  Decoder:            OPTIMIZED (morton codes from octree decompressor)")
     print("=" * 70)
 
     # Warmup GPU
@@ -261,7 +234,6 @@ if __name__ == "__main__":
     frame = args.frame_start
     ckpt_path = os.path.join(args.ply_path, str(frame), "point_cloud")
     if not os.path.exists(ckpt_path):
-        print(f"Warning: Checkpoint not found: {ckpt_path}, skipping frame {frame}")
         raise ValueError(f"Checkpoint not found: {ckpt_path}")
     max_iter = searchForMaxIteration(ckpt_path)
     ply_file_path = os.path.join(ckpt_path, f"iteration_{max_iter}", "point_cloud.ply")
@@ -282,7 +254,7 @@ if __name__ == "__main__":
     )
     torch.cuda.synchronize(device_id)
 
-    decoded_params = decode_livogs(compressed_state, device=device, device_id=device_id)
+    decoded_params = decode_livogs_optimized(compressed_state, device=device, device_id=device_id)
 
     torch.cuda.synchronize(device_id)
     print("Warmup GPU done.")
@@ -328,10 +300,10 @@ if __name__ == "__main__":
         attribute_compressed_bytes = compressed_state['attribute_compressed_bytes']
         per_channel_compressed_bytes = compressed_state['per_channel_compressed_bytes']
 
-        # --- 3. Decode (timed) ---
+        # --- 3. Decode OPTIMIZED (timed) ---
         t_dec_start = time.perf_counter()
 
-        decoded_params = decode_livogs(compressed_state, device=device, device_id=device_id)
+        decoded_params = decode_livogs_optimized(compressed_state, device=device, device_id=device_id)
 
         torch.cuda.synchronize(device_id)
         t_dec_end = time.perf_counter()
@@ -358,14 +330,13 @@ if __name__ == "__main__":
         })
 
         tqdm.write(
-            f"  Frame {frame}: N={N_original}→{Nvox} voxels, "
+            f"  Frame {frame}: N={N_original}->{Nvox} voxels, "
             f"enc={encode_time_ms:.2f} ms, dec={decode_time_ms:.2f} ms, "
             f"uncomp={uncompressed_size_bytes / 1024 / 1024:.2f} MB, "
             f"comp={compressed_size_bytes / 1024 / 1024:.2f} MB, "
             f"ratio={uncompressed_size_bytes / compressed_size_bytes:.2f}x"
         )
 
-        # Clean up
         del params, compressed_state, decoded_params
         torch.cuda.empty_cache()
 
@@ -410,7 +381,7 @@ if __name__ == "__main__":
         total_sh_rest = sum(sum(ch[11:]) for ch in per_ch)
         total_orig_points = sum(r["original_points"] for r in benchmark_rows)
         total_vox_points = sum(r["voxelized_points"] for r in benchmark_rows)
-        # Save config JSON for reproducibility
+
         import json
         config = {
             "J": args.J,
@@ -422,12 +393,13 @@ if __name__ == "__main__":
             "frame_end": args.frame_end,
             "interval": args.interval,
             "nvcomp_algorithm": nvcomp_algorithm,
+            "decoder": "optimized_v1_morton_reuse",
         }
         with open(os.path.join(args.output_folder, "livogs_config.json"), "w") as f:
             json.dump(config, f, indent=4)
 
         print("\n" + "=" * 70)
-        print("Benchmark Summary (LiVoGS compress + decompress)")
+        print("Benchmark Summary (LiVoGS compress + OPTIMIZED decompress)")
         print("=" * 70)
         print(f"  Frames processed:          {n}")
         print(f"  Total encode time:         {total_enc_ms / 1000:.2f} s  (avg {total_enc_ms / n:.2f} ms/frame)")
@@ -442,7 +414,7 @@ if __name__ == "__main__":
         print(f"    - sh_dc:   {total_sh_dc / 1024 / 1024:.2f} MB  (avg {total_sh_dc / n / 1024 / 1024:.2f} MB/frame)")
         print(f"    - sh_rest: {total_sh_rest / 1024 / 1024:.2f} MB  (avg {total_sh_rest / n / 1024 / 1024:.2f} MB/frame)")
         print(f"  Compression ratio:         {total_uncomp / total_comp:.2f}x")
-        print(f"  Avg point reduction:       {total_orig_points / n:.0f} \u2192 {total_vox_points / n:.0f} "
+        print(f"  Avg point reduction:       {total_orig_points / n:.0f} -> {total_vox_points / n:.0f} "
               f"({total_orig_points / total_vox_points:.2f}x)")
         print(f"  CSV: {csv_path}")
         print("=" * 70)
