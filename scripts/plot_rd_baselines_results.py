@@ -34,13 +34,9 @@ PLOT_OUTPUT_DIR = str(DEFAULT_PLOTS_DIR)
 PLOT_DATASETS: list[str] | None = None
 PLOT_SEQUENCES: list[str] | None = None
 PLOT_VIDEOGS_GROUP_SIZES: list[int] | None = [20]
-PLOT_SKIP_SAVED_RESULTS = False
-PLOT_FORCE_RECOLLECT = False
+PLOT_FORCE_RECOLLECT = True
 
 # -- LivoGS hull overlay ---------------------------------------------------
-# Change LIVOGS_RD_SUBDIR to switch between RD experiment folders, e.g.
-#   "livogs_rd_nvcomp"  — original per-depth hull (convex_hull_*.csv)
-#   "livogs_rd_new"     — AC/DC sweep hull (*_sweep_hull.csv)
 LIVOGS_DATA_PATHS: dict[str, str | None] = {
     "HiFi4G": "/synology/rajrup/VideoGS",
     "N3DV": "/synology/rajrup/Queen",
@@ -197,7 +193,6 @@ def plot_group(
     frame_id: int,
     rows: list[dict[str, Any]],
     output_root: str,
-    skip_saved_results: bool,
 ) -> None:
     fig, ax = plt.subplots(figsize=(10, 7))
 
@@ -290,17 +285,16 @@ def plot_group(
     dataset_dir = os.path.join(output_root, dataset)
     os.makedirs(dataset_dir, exist_ok=True)
     out_path = os.path.join(dataset_dir, f"rd_baselines_curve_{sequence}_frame{frame_id}.png")
-    if skip_saved_results and os.path.isfile(out_path):
-        print(f"SKIP saved plot: {out_path}")
-        plt.close(fig)
-        return
-
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
     print(f"Saved: {out_path}")
 
 
-def _collect_baselines_to_csv(csv_path: str) -> None:
+def _collect_baselines_to_csv(
+    csv_path: str,
+    selected_datasets: list[str] | None,
+    selected_sequences: list[str] | None,
+) -> None:
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(
@@ -312,9 +306,17 @@ def _collect_baselines_to_csv(csv_path: str) -> None:
     sys.modules[spec.name] = runner
     spec.loader.exec_module(runner)
 
+    allowed_datasets = set(selected_datasets) if selected_datasets else None
+    allowed_sequences = set(selected_sequences) if selected_sequences else None
+
     all_rows: list[dict[str, Any]] = []
     for ds_name, cfg in runner.ALL_DATASETS.items():
-        for sequence in runner.SEQUENCE_SETTINGS[cfg.name]:
+        if allowed_datasets is not None and ds_name not in allowed_datasets:
+            continue
+        sequences = list(runner.SEQUENCE_SETTINGS[cfg.name])
+        if allowed_sequences is not None:
+            sequences = [sequence for sequence in sequences if sequence in allowed_sequences]
+        for sequence in sequences:
             for bl_key, collector in runner.BASELINE_COLLECTORS.items():
                 rows = collector(cfg, sequence)
                 all_rows.extend(rows)
@@ -335,7 +337,7 @@ def main() -> None:
 
     if PLOT_FORCE_RECOLLECT:
         print("Re-collecting baseline results ...")
-        _collect_baselines_to_csv(csv_path)
+        _collect_baselines_to_csv(csv_path, PLOT_DATASETS, PLOT_SEQUENCES)
 
     if not os.path.isfile(csv_path):
         raise FileNotFoundError(f"CSV not found: {csv_path}")
@@ -369,7 +371,7 @@ def main() -> None:
     print(f"Output dir: {PLOT_OUTPUT_DIR}")
     print(f"Groups:     {len(groups)}")
     for (dataset, sequence, frame_id), group_rows in sorted(groups.items()):
-        plot_group(dataset, sequence, frame_id, group_rows, PLOT_OUTPUT_DIR, PLOT_SKIP_SAVED_RESULTS)
+        plot_group(dataset, sequence, frame_id, group_rows, PLOT_OUTPUT_DIR)
 
 
 if __name__ == "__main__":
