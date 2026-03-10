@@ -14,6 +14,8 @@ import csv
 import itertools
 import json
 import os
+import glob
+import re
 import shlex
 import shutil
 import subprocess
@@ -52,7 +54,7 @@ FIRST_FRAME_SETTINGS: dict[str, int] = {
 
 
 VIDEOGS_QPS = list(range(0, 41))
-VIDEOGS_GROUP_SIZE = 1
+VIDEOGS_GROUP_SIZE = 20
 
 MESONGS_DEPTHS: dict[str, tuple[int, ...]] = {
     "HiFi4G": (8, 10, 12),
@@ -70,8 +72,8 @@ DRACOGS_CL = 10
 
 BASELINES = [
     "videogs", 
-    "dracogs",
-    "mesongs",
+    # "dracogs",
+    # "mesongs",
 ]
 CUDA_DEVICES = ["0", "1"]
 SKIP_EXISTING = True
@@ -190,6 +192,11 @@ def _frame_span(cfg: DatasetConfig) -> tuple[int, int, int]:
     return fid, fid, 1
 
 
+def _videogs_frame_span(cfg: DatasetConfig) -> tuple[int, int, int]:
+    fid = _first_frame(cfg)
+    return fid, fid + VIDEOGS_GROUP_SIZE, 1
+
+
 def _frame_span_tag(cfg: DatasetConfig) -> str:
     fs, fe, iv = _frame_span(cfg)
     if cfg.frame_end_exclusive:
@@ -197,8 +204,13 @@ def _frame_span_tag(cfg: DatasetConfig) -> str:
     return f"frames_{fs}_{fe}_int_{iv}"
 
 
+def _videogs_frame_span_tag(cfg: DatasetConfig) -> str:
+    fs, fe, iv = _videogs_frame_span(cfg)
+    return f"frames_{fs}_{fe - 1}_int_{iv}"
+
+
 def _videogs_output_folder(cfg: DatasetConfig, sequence: str, qp: int) -> str:
-    return str(_model_root(cfg, sequence) / "compression" / "videogs" / f"qp_{qp}" / _frame_span_tag(cfg))
+    return str(_model_root(cfg, sequence) / "compression" / "videogs" / f"qp_{qp}" / _videogs_frame_span_tag(cfg))
 
 
 def _mesongs_output_folder(
@@ -353,7 +365,7 @@ def run_videogs_rd(
     dry_run: bool,
     skip_existing: bool,
 ) -> list[tuple[str, str, str]]:
-    fs, fe, iv = _frame_span(cfg)
+    fs, fe, iv = _videogs_frame_span(cfg)
     gt = _gt_model_path(cfg, sequence)
     project_root = _project_root(cfg)
     qps = list(VIDEOGS_QPS)
@@ -623,24 +635,78 @@ def _load_single_frame_result(
 def collect_videogs(cfg: DatasetConfig, sequence: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     fid = _first_frame(cfg)
+
+    frame_tag_re = re.compile(r"^frames_(\d+)_(\d+)_int_(\d+)$")
+
+    def infer_group_size_from_tag(out_path: Path) -> Optional[int]:
+        m = frame_tag_re.match(out_path.name)
+        if m is None:
+            return None
+        start = int(m.group(1))
+        end = int(m.group(2))
+        interval = int(m.group(3))
+        if interval <= 0 or end < start:
+            return None
+        return ((end - start) // interval) + 1
+
+    def discover_output_folders_for_qp(qp: int) -> list[tuple[str, Optional[int]]]:
+        qp_root = _model_root(cfg, sequence) / "compression" / "videogs" / f"qp_{qp}"
+        candidates: list[tuple[str, Optional[int]]] = []
+
+        if qp_root.is_dir():
+            for out_dir in sorted(glob.glob(str(qp_root / "frames_*_int_*"))):
+                out_path = Path(out_dir)
+                config_path = out_path / "videogs_config.json"
+                detected_group_size = infer_group_size_from_tag(out_path)
+                detected_frame_start: Optional[int] = None
+                if config_path.is_file():
+                    try:
+                        with open(config_path, encoding="utf-8") as f:
+                            config = json.load(f)
+                        raw_start = config.get("frame_start")
+                        if raw_start is not None:
+                            detected_frame_start = int(raw_start)
+                    except (OSError, json.JSONDecodeError, ValueError, TypeError):
+                        pass
+
+                if detected_frame_start is not None and detected_frame_start != fid:
+                    continue
+                candidates.append((str(out_path), detected_group_size))
+
+        default_out = _videogs_output_folder(cfg, sequence, qp)
+        default_group_size = VIDEOGS_GROUP_SIZE
+        if not any(out == default_out for out, _ in candidates):
+            candidates.append((default_out, default_group_size))
+
+        unique: list[tuple[str, Optional[int]]] = []
+        seen: set[str] = set()
+        for out, gsize in candidates:
+            if out in seen:
+                continue
+            seen.add(out)
+            unique.append((out, gsize))
+        return unique
+
     for qp in VIDEOGS_QPS:
-        out = _videogs_output_folder(cfg, sequence, qp)
-        row = _load_single_frame_result(
-            out,
-            BENCHMARK_CSV_NAMES["videogs"],
-            fid,
-            compressed_size_field="compressed_size_gop_avg_bytes",
-        )
-        if row is None:
-            continue
-        row.update(
-            dataset=cfg.name,
-            sequence=sequence,
-            frame_id=fid,
-            baseline="VideoGS",
-            params=f"qp={qp}",
-        )
-        rows.append(row)
+        for out, group_size in discover_output_folders_for_qp(qp):
+            row = _load_single_frame_result(
+                out,
+                BENCHMARK_CSV_NAMES["videogs"],
+                fid,
+                compressed_size_field="compressed_size_gop_avg_bytes",
+            )
+            if row is None:
+                continue
+            param_suffix = f" g={group_size}" if group_size is not None else ""
+            row.update(
+                dataset=cfg.name,
+                sequence=sequence,
+                frame_id=fid,
+                baseline="VideoGS",
+                params=f"qp={qp}{param_suffix}",
+                group_size=group_size,
+            )
+            rows.append(row)
     return rows
 
 
@@ -697,6 +763,7 @@ CSV_COLUMNS = [
     "frame_id",
     "baseline",
     "params",
+    "group_size",
     "compressed_size_bytes",
     "compressed_mb",
     "uncompressed_size_bytes",
