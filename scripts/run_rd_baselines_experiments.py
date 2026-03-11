@@ -25,8 +25,8 @@ from pathlib import Path
 from typing import Callable, TypeVar
 
 RUN_DRY_RUN = False
-RUN_SKIP_COMPLETED_RUNS = True
-RUN_OVERWRITE_CSV_RES = False
+RUN_SKIP_COMPLETED_RUNS = False
+RUN_OVERWRITE_CSV_RES = True
 RUN_CUDA_DEVICES: tuple[str, ...] = ("0", "1")
 
 HIFI4G_DATA_ROOT = "/synology/rajrup/VideoGS"
@@ -34,7 +34,8 @@ N3DV_DATA_ROOT = "/synology/rajrup/Queen"
 RUN_BASELINES: tuple[str, ...] = (
     # "videogs",
     # "dracogs",
-    "mesongs",
+    # "mesongs",
+    "gpcc",
 )
 
 VIDEOGS_QP_VALUES: tuple[int, ...] = tuple(range(0, 41))
@@ -54,30 +55,58 @@ DRACOGS_ET: tuple[int, ...] = (0, 8, 12, 16)
 DRACOGS_ES: tuple[int, ...] = (0, 8, 12, 16)
 DRACOGS_CL = 10
 
+GPCC_TMC3_PATH = "/home/haodongw/workspace/mpeg-pcc-tmc13/build/tmc3/tmc3"
+GPCC_OCTREE_DEPTHS_BY_DATASET: dict[str, tuple[int, ...]] = {
+    "HiFi4G": (15,),
+    "N3DV": (15,),
+}
+GPCC_QP_COMBOS: tuple[tuple[int, int, int], ...] = (  # (qp_rest, qp_dc, qp_opacity)
+    (40, 4, 16), # (40, 4, 34), (40, 4, 40),
+    # (40, 16, 16), (40, 16, 34), (40, 16, 40),
+    # (40, 20, 16), (40, 20, 34), (40, 20, 40),
+    # (40, 24, 16), (40, 24, 34), (40, 24, 40),
+    # (40, 28, 16), (40, 28, 34), (40, 28, 40),
+    (38, 4, 4), # (38, 16, 4),
+    (34, 4, 4), # (34, 16, 4),
+    (31, 4, 4), # (31, 16, 4),
+    (28, 4, 4), # (28, 16, 4),
+    (38, 4, 16), # (38, 16, 16),
+    (34, 4, 16), # (34, 16, 16),
+    (31, 4, 16), # (31, 16, 16),
+    (28, 4, 16), # (28, 16, 16),
+    # (38, 4, 28), (38, 16, 28),
+    # (34, 4, 28), (34, 16, 28),
+    # (31, 4, 28), (31, 16, 28),
+    # (28, 4, 28), (28, 16, 28),
+    # (16, 4, 4), (16, 16, 4),
+    (4, 4, 4), (4, 16, 4),
+    # (16, 4, 16), (4, 4, 16),
+)
+
 
 SEQUENCE_SETTINGS: dict[str, tuple[str, ...]] = {
-    # "HiFi4G": (
-    #     "4K_Actor1_Greeting",
-    #     "4K_Actor2_Dancing",
-    #     "4K_Actor3_Violin",
-    #     "4K_Actor4_Dancing",
-    #     "4K_Actor5_Oil-paper_Umbrella",
-    #     "4K_Actor6_Changing_Clothes",
-    #     "4K_Actor7_Nunchaku",
-    # ),
-    "N3DV": (
+    "HiFi4G": (
+        "4K_Actor1_Greeting",
+        # "4K_Actor2_Dancing",
+        # "4K_Actor3_Violin",
+        # "4K_Actor4_Dancing",
+        # "4K_Actor5_Oil-paper_Umbrella",
+        # "4K_Actor6_Changing_Clothes",
+        # "4K_Actor7_Nunchaku",
+    ),
+    # "N3DV": (
         # "cook_spinach",
-        "coffee_martini",
+        # "coffee_martini",
         # "cut_roasted_beef",
         # "flame_salmon_1",
         # "flame_steak",
         # "sear_steak",
-    ),
+    # ),
 }
 
 FRAME_ID_LISTS: dict[str, tuple[int, ...]] = {
     "HiFi4G": (0,),
-    "N3DV": tuple(range(1, 201, 10))
+    "N3DV": (1,),
 }
 
 
@@ -94,6 +123,8 @@ class SweepSpaceConfig:
     dracogs_et: tuple[int, ...]
     dracogs_es: tuple[int, ...]
     dracogs_cl: int
+    gpcc_octree_depths_by_dataset: dict[str, tuple[int, ...]]
+    gpcc_qp_combos: tuple[tuple[int, int, int], ...]
 
 
 @dataclass(frozen=True)
@@ -116,6 +147,8 @@ SWEEP_SPACE = SweepSpaceConfig(
     dracogs_et=DRACOGS_ET,
     dracogs_es=DRACOGS_ES,
     dracogs_cl=DRACOGS_CL,
+    gpcc_octree_depths_by_dataset=GPCC_OCTREE_DEPTHS_BY_DATASET,
+    gpcc_qp_combos=GPCC_QP_COMBOS,
 )
 
 
@@ -150,7 +183,7 @@ HIFI4G = DatasetConfig(
     sh_degree=3,
     resolution=2,
     evaluation_env="videogs",
-    baseline_envs={"dracogs": "videogs", "mesongs": "mesongs", "videogs": "videogs"},
+    baseline_envs={"dracogs": "videogs", "mesongs": "mesongs", "videogs": "videogs", "gpcc": "videogs"},
     frame_end_exclusive=True,
     mesongs_script_name="compress_decompress_pipeline.py",
     mesongs_has_resolution_arg=True,
@@ -164,7 +197,7 @@ N3DV = DatasetConfig(
     sh_degree=2,
     resolution=2,
     evaluation_env="queen",
-    baseline_envs={"dracogs": "queen", "mesongs": "mesongs", "videogs": "queen"},
+    baseline_envs={"dracogs": "queen", "mesongs": "mesongs", "videogs": "queen", "gpcc": "queen"},
     frame_end_exclusive=False,
     mesongs_script_name="compression_decompress_pipeline.py",
     mesongs_has_resolution_arg=False,
@@ -280,6 +313,19 @@ def _dracogs_output_folder(
 ) -> str:
     params_tag = f"eg_{eg}_eo_{eo}_et_{et}_es_{es}_cl_{SWEEP_SPACE.dracogs_cl}"
     return str(_model_root(cfg, sequence) / "compression" / "dracogs" / params_tag / _frame_output_tag(frame_id))
+
+
+def _gpcc_output_folder(
+    cfg: DatasetConfig,
+    sequence: str,
+    frame_id: int,
+    depth: int,
+    qp_opacity: int,
+    qp_dc: int,
+    qp_rest: int,
+) -> str:
+    params_tag = f"J{depth}_rest{qp_rest}_dc{qp_dc}_op{qp_opacity}"
+    return str(_model_root(cfg, sequence) / "compression" / "gpcc" / params_tag / _frame_output_tag(frame_id))
 
 
 def run_cmd(cmd: list[str], cwd: Path, dry_run: bool, cuda_device: str) -> None:
@@ -614,6 +660,59 @@ def run_dracogs_rd(
     return _run_tasks_across_devices(tasks, run_single)
 
 
+def run_gpcc_rd(
+    cfg: DatasetConfig,
+    sequence: str,
+    dry_run: bool,
+    skip_completed_runs: bool,
+) -> list[tuple[str, str, str]]:
+    gt = _gt_model_path(cfg, sequence)
+    project_root = _project_root(cfg)
+    tasks = [
+        (frame_id, depth, qp_rest, qp_dc, qp_opacity)
+        for frame_id in _frame_ids(cfg)
+        for depth in SWEEP_SPACE.gpcc_octree_depths_by_dataset[cfg.name]
+        for qp_rest, qp_dc, qp_opacity in SWEEP_SPACE.gpcc_qp_combos
+    ]
+
+    def run_single(task: tuple[int, int, int, int, int], cuda_device: str) -> list[tuple[str, str, str]]:
+        failures: list[tuple[str, str, str]] = []
+        frame_id, depth, qp_rest, qp_dc, qp_opacity = task
+        output_folder = _gpcc_output_folder(cfg, sequence, frame_id, depth, qp_opacity, qp_dc, qp_rest)
+        short = f"f={frame_id} J={depth} op={qp_opacity} dc={qp_dc} rest={qp_rest}"
+        if skip_completed_runs and _output_complete(output_folder):
+            log_step(f"SKIP GPCC | {cfg.name} | {sequence} | {short}")
+            return failures
+
+        log_step(f"GPCC | {cfg.name} | {sequence} | {short} | cuda={cuda_device} | {timestamp()}")
+        cmd = conda_python_cmd(
+            cfg.baseline_envs["gpcc"],
+            project_root / "scripts" / "gpcc_baseline" / "compress_decompress_pipeline.py",
+            [
+                "--input_dir", gt,
+                "--output_dir", output_folder,
+                "--output_ply_dir", f"{output_folder}/decompressed_ply",
+                "--tmc3_path", GPCC_TMC3_PATH,
+                "--voxel_depth", str(depth),
+                "--qp_opacity", str(qp_opacity),
+                "--qp_dc", str(qp_dc),
+                "--qp_rest", str(qp_rest),
+                "--frame_start", str(frame_id),
+                "--num_frames", "1",
+            ],
+        )
+        try:
+            run_cmd(cmd, cwd=project_root, dry_run=dry_run, cuda_device=cuda_device)
+            run_evaluation(cfg, sequence, frame_id, output_folder, dry_run, cuda_device)
+        except subprocess.CalledProcessError as exc:
+            print(f"WARNING: GPCC {short} failed for {cfg.name}/{sequence} (exit {exc.returncode})")
+            _cleanup_partial(output_folder)
+            failures.append((cfg.name, "gpcc", sequence))
+        return failures
+
+    return _run_tasks_across_devices(tasks, run_single)
+
+
 BASELINE_RUNNERS: dict[
     str,
     Callable[[DatasetConfig, str, bool, bool], list[tuple[str, str, str]]],
@@ -621,6 +720,7 @@ BASELINE_RUNNERS: dict[
     "videogs": run_videogs_rd,
     "mesongs": run_mesongs_rd,
     "dracogs": run_dracogs_rd,
+    "gpcc": run_gpcc_rd,
 }
 
 
@@ -678,6 +778,13 @@ def _combo_counts(cfg: DatasetConfig, baselines: list[str], n_sequences: int, n_
             * len(SWEEP_SPACE.dracogs_eo)
             * len(SWEEP_SPACE.dracogs_et)
             * len(SWEEP_SPACE.dracogs_es)
+            * n_sequences
+            * n_frames
+        )
+    if "gpcc" in baselines:
+        counts["GPCC"] = (
+            len(SWEEP_SPACE.gpcc_octree_depths_by_dataset[cfg.name])
+            * len(SWEEP_SPACE.gpcc_qp_combos)
             * n_sequences
             * n_frames
         )

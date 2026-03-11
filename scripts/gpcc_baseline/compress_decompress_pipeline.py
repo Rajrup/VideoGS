@@ -38,14 +38,12 @@ if _OCTREE_GPU_PYTHON not in sys.path:
     sys.path.insert(0, _OCTREE_GPU_PYTHON)
 
 try:
-    voxelize_pc = importlib.import_module("voxelize_pc").voxelize_pc
     merge_gaussian_clusters_with_indices = (
         importlib.import_module("merge_cluster_cuda").merge_gaussian_clusters_with_indices
     )
     calc_morton = importlib.import_module("gpu_octree_codec").calc_morton
     _livogs_import_error = None
 except Exception as exc:
-    voxelize_pc = None
     merge_gaussian_clusters_with_indices = None
     calc_morton = None
     _livogs_import_error = exc
@@ -262,15 +260,21 @@ def _run_tmc3_command(command):
 
 
 def _build_encode_command(tmc3_path, input_ply, output_bin, attr_type, qp, voxel_depth):
+    # _DYNAMIC is replaced at build time with the actual qp / voxel_depth values.
+    # Argument order matters: tmc3 treats --attribute as the boundary that
+    # finalises the current attribute context, so --qp must precede it.
+    _DYNAMIC = None
     params = {
         "opacity": {
             "--mode": "0",
             "--geomTreeType": "0",
             "--partitionMethod": "3",
+            "--partitionOctreeDepth": _DYNAMIC,
             "--convertPlyColourspace": "1",
             "--transformType": "0",
             "--rahtExtension": "0",
             "--rahtPredictionEnabled": "0",
+            "--qp": _DYNAMIC,
             "--bitdepth": "8",
             "--colourMatrix": "2",
             "--attrOffset": "0",
@@ -282,10 +286,12 @@ def _build_encode_command(tmc3_path, input_ply, output_bin, attr_type, qp, voxel
             "--mode": "0",
             "--geomTreeType": "0",
             "--partitionMethod": "3",
+            "--partitionOctreeDepth": _DYNAMIC,
             "--convertPlyColourspace": "0",
             "--transformType": "0",
             "--rahtExtension": "0",
             "--rahtPredictionEnabled": "0",
+            "--qp": _DYNAMIC,
             "--bitdepth": "8",
             "--colourMatrix": "0",
             "--attrOffset": "0",
@@ -297,10 +303,12 @@ def _build_encode_command(tmc3_path, input_ply, output_bin, attr_type, qp, voxel
             "--mode": "0",
             "--geomTreeType": "0",
             "--partitionMethod": "3",
+            "--partitionOctreeDepth": _DYNAMIC,
             "--convertPlyColourspace": "0",
             "--transformType": "0",
             "--rahtExtension": "0",
             "--rahtPredictionEnabled": "0",
+            "--qp": _DYNAMIC,
             "--bitdepth": "8",
             "--colourMatrix": "0",
             "--attrOffset": "0",
@@ -350,21 +358,20 @@ def _build_encode_command(tmc3_path, input_ply, output_bin, attr_type, qp, voxel
         },
     }
 
+    dynamic_values = {
+        "--partitionOctreeDepth": str(voxel_depth),
+        "--qp": str(qp),
+    }
+
     command = [
         tmc3_path,
         f"--uncompressedDataPath={input_ply}",
         f"--compressedStreamPath={output_bin}",
     ]
-    if attr_type in {"opacity", "dc", "rest"}:
-        command.append(f"--partitionOctreeDepth={voxel_depth}")
-
     for key, value in params[attr_type].items():
-        if key == "--qp" and attr_type in {"opacity", "dc", "rest"}:
-            continue
+        if value is _DYNAMIC:
+            value = dynamic_values[key]
         command.append(f"{key}={value}")
-
-    if attr_type in {"opacity", "dc", "rest"}:
-        command.append(f"--qp={qp}")
 
     return command
 
@@ -384,7 +391,6 @@ def _voxelize_and_merge(params, voxel_depth, device):
     if torch is None:
         raise RuntimeError("PyTorch is required for voxelization")
     assert calc_morton is not None
-    assert voxelize_pc is not None
     assert merge_gaussian_clusters_with_indices is not None
 
     means = params["means"]
@@ -408,16 +414,13 @@ def _voxelize_and_merge(params, voxel_depth, device):
     if morton_codes_points.dtype == torch.uint64:
         morton_codes_points = morton_codes_points.to(torch.int64)
 
-    _, _, voxel_indices, _, info = voxelize_pc(
-        means,
-        vmin=vmin,
-        width=float(width.item()),
-        J=voxel_depth,
-        device=str(means.device),
-        morton_codes=morton_codes_points,
-    )
+    sorted_morton, sort_idx = torch.sort(morton_codes_points)
+    voxel_boundary = sorted_morton[1:] - sorted_morton[:-1]
+    voxel_indices = torch.cat([
+        torch.tensor([0], device=means.device),
+        torch.where(voxel_boundary != 0)[0] + 1,
+    ])
 
-    sort_idx = info["sort_idx"]
     cluster_indices = sort_idx.int()
     cluster_offsets = torch.cat(
         [voxel_indices.int(), torch.tensor([n_points], dtype=torch.int32, device=means.device)],
@@ -566,6 +569,8 @@ def encode_gpcc(ply_path, output_dir, qp_config, tmc3_path, voxel_depth):
         for future in concurrent.futures.as_completed(futures):
             future.result()
 
+    shutil.rmtree(attr_ply_dir)
+
     size_stats = {
         "opacity_bytes": sum(os.path.getsize(os.path.join(compressed_dirs["opacity"], n)) for n in metadata["files"]["opacity"]),
         "dc_bytes": sum(os.path.getsize(os.path.join(compressed_dirs["dc"], n)) for n in metadata["files"]["dc"]),
@@ -591,7 +596,7 @@ def decode_gpcc(compressed_dir, output_ply_path, metadata_json_path, tmc3_path):
 
     temp_decode_dir = os.path.join(compressed_dir, "temp_decode")
     if os.path.exists(temp_decode_dir):
-        shutil.rmtree(temp_decode_dir)
+        shutil.rmtree(temp_decode_dir, ignore_errors=True)
     os.makedirs(temp_decode_dir, exist_ok=True)
 
     category_dirs = {
@@ -603,81 +608,76 @@ def decode_gpcc(compressed_dir, output_ply_path, metadata_json_path, tmc3_path):
     }
 
     decomp_ply_paths: Dict[str, List[str]] = {"opacity": [], "dc": [], "rest": [], "scale": [], "rot": []}
+    decode_jobs: List[Any] = []
     for category in ["opacity", "dc", "rest", "scale", "rot"]:
         out_cat_dir = os.path.join(temp_decode_dir, f"{category}_decompressed")
         os.makedirs(out_cat_dir, exist_ok=True)
         for bin_name in metadata["files"][category]:
             input_bin = os.path.join(category_dirs[category], bin_name)
             output_ply = os.path.join(out_cat_dir, os.path.splitext(bin_name)[0] + ".ply")
-            _run_tmc3_command(_build_decode_command(tmc3_path, input_bin, output_ply))
+            decode_jobs.append(_build_decode_command(tmc3_path, input_bin, output_ply))
             decomp_ply_paths[category].append(output_ply)
 
-    points_ref = None
-    n_points = None
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        futures = [executor.submit(_run_tmc3_command, cmd) for cmd in decode_jobs]
+        for future in concurrent.futures.as_completed(futures):
+            future.result()
 
-    opacity_points, _, opacity_u16 = _read_attribute_ply(decomp_ply_paths["opacity"][0])
-    if opacity_u16 is None:
-        raise ValueError("Opacity decompressed PLY is missing reflectance")
-    opacity_points_sorted, opacity_sort_idx = morton_order_sort(opacity_points)
+    # --- Compute morton sort index ONCE from the first decompressed PLY ---
+    # All 24 attribute streams share identical voxel geometry, so the sort
+    # order is the same for every file.  Computing it once avoids 23
+    # redundant morton-code calculations + argsorts.
+    first_ply = decomp_ply_paths["opacity"][0]
+    ref_points, _, _ = _read_attribute_ply(first_ply)
+    points_ref, sort_idx = morton_order_sort(ref_points)
+    n_points = points_ref.shape[0]
+
+    def _read_sorted_reflectance(ply_path):
+        _, _, refl = _read_attribute_ply(ply_path)
+        if refl is None:
+            raise ValueError(f"Decompressed PLY missing reflectance: {ply_path}")
+        return refl[sort_idx].astype(np.float32)
+
+    def _read_sorted_colors(ply_path):
+        _, colors, _ = _read_attribute_ply(ply_path)
+        if colors is None:
+            raise ValueError(f"Decompressed PLY missing color attributes: {ply_path}")
+        return colors[sort_idx].astype(np.float32)
+
     opacity_denorm = uint16_to_float(
-        opacity_u16[opacity_sort_idx].astype(np.float32),
+        _read_sorted_reflectance(decomp_ply_paths["opacity"][0]),
         metadata["Attribute"]["opacity"]["min"],
         metadata["Attribute"]["opacity"]["max"],
     )
-    points_ref = opacity_points_sorted
-    n_points = points_ref.shape[0]
 
-    dc_points, dc_colors, _ = _read_attribute_ply(decomp_ply_paths["dc"][0])
-    if dc_colors is None:
-        raise ValueError("DC decompressed PLY is missing color attributes")
-    dc_points_sorted, dc_sort_idx = morton_order_sort(dc_points)
-    if dc_points_sorted.shape[0] != n_points:
-        raise ValueError("Point count mismatch between opacity and dc during decode")
-
-    y0 = uchar_to_float(dc_colors[dc_sort_idx, 0].astype(np.float32), metadata["Attribute"]["f_dc_0"]["min"], metadata["Attribute"]["f_dc_0"]["max"])
-    y1 = uchar_to_float(dc_colors[dc_sort_idx, 1].astype(np.float32), metadata["Attribute"]["f_dc_1"]["min"], metadata["Attribute"]["f_dc_1"]["max"])
-    y2 = uchar_to_float(dc_colors[dc_sort_idx, 2].astype(np.float32), metadata["Attribute"]["f_dc_2"]["min"], metadata["Attribute"]["f_dc_2"]["max"])
+    dc_sorted = _read_sorted_colors(decomp_ply_paths["dc"][0])
+    y0 = uchar_to_float(dc_sorted[:, 0], metadata["Attribute"]["f_dc_0"]["min"], metadata["Attribute"]["f_dc_0"]["max"])
+    y1 = uchar_to_float(dc_sorted[:, 1], metadata["Attribute"]["f_dc_1"]["min"], metadata["Attribute"]["f_dc_1"]["max"])
+    y2 = uchar_to_float(dc_sorted[:, 2], metadata["Attribute"]["f_dc_2"]["min"], metadata["Attribute"]["f_dc_2"]["max"])
     dc_rgb = convert_yuv2rgb(np.stack([y0, y1, y2], axis=1)).astype(np.float32)
 
     rest_rgb_channels = []
     for rest_idx, rest_ply in enumerate(decomp_ply_paths["rest"]):
-        rest_points, rest_colors, _ = _read_attribute_ply(rest_ply)
-        if rest_colors is None:
-            raise ValueError(f"Rest decompressed PLY is missing color attributes: {rest_ply}")
-        rest_points_sorted, rest_sort_idx = morton_order_sort(rest_points)
-        if rest_points_sorted.shape[0] != n_points:
-            raise ValueError("Point count mismatch in rest attributes during decode")
+        rest_sorted = _read_sorted_colors(rest_ply)
         base = rest_idx * 3
-        r0 = uchar_to_float(rest_colors[rest_sort_idx, 0].astype(np.float32), metadata["Attribute"][f"f_rest_{base}"]["min"], metadata["Attribute"][f"f_rest_{base}"]["max"])
-        r1 = uchar_to_float(rest_colors[rest_sort_idx, 1].astype(np.float32), metadata["Attribute"][f"f_rest_{base + 1}"]["min"], metadata["Attribute"][f"f_rest_{base + 1}"]["max"])
-        r2 = uchar_to_float(rest_colors[rest_sort_idx, 2].astype(np.float32), metadata["Attribute"][f"f_rest_{base + 2}"]["min"], metadata["Attribute"][f"f_rest_{base + 2}"]["max"])
+        r0 = uchar_to_float(rest_sorted[:, 0], metadata["Attribute"][f"f_rest_{base}"]["min"], metadata["Attribute"][f"f_rest_{base}"]["max"])
+        r1 = uchar_to_float(rest_sorted[:, 1], metadata["Attribute"][f"f_rest_{base + 1}"]["min"], metadata["Attribute"][f"f_rest_{base + 1}"]["max"])
+        r2 = uchar_to_float(rest_sorted[:, 2], metadata["Attribute"][f"f_rest_{base + 2}"]["min"], metadata["Attribute"][f"f_rest_{base + 2}"]["max"])
         rest_rgb_triplet = convert_yuv2rgb(np.stack([r0, r1, r2], axis=1)).astype(np.float32)
         rest_rgb_channels.extend([rest_rgb_triplet[:, 0], rest_rgb_triplet[:, 1], rest_rgb_triplet[:, 2]])
 
     scales = np.zeros((n_points, 3), dtype=np.float32)
     for i, scale_ply in enumerate(decomp_ply_paths["scale"]):
-        scale_points, _, scale_u16 = _read_attribute_ply(scale_ply)
-        if scale_u16 is None:
-            raise ValueError(f"Scale decompressed PLY is missing reflectance: {scale_ply}")
-        scale_points_sorted, scale_sort_idx = morton_order_sort(scale_points)
-        if scale_points_sorted.shape[0] != n_points:
-            raise ValueError("Point count mismatch in scale attributes during decode")
         scales[:, i] = uint16_to_float(
-            scale_u16[scale_sort_idx].astype(np.float32),
+            _read_sorted_reflectance(scale_ply),
             metadata["Attribute"][f"scale_{i}"]["min"],
             metadata["Attribute"][f"scale_{i}"]["max"],
         )
 
     quats = np.zeros((n_points, 4), dtype=np.float32)
     for i, rot_ply in enumerate(decomp_ply_paths["rot"]):
-        rot_points, _, rot_u16 = _read_attribute_ply(rot_ply)
-        if rot_u16 is None:
-            raise ValueError(f"Rotation decompressed PLY is missing reflectance: {rot_ply}")
-        rot_points_sorted, rot_sort_idx = morton_order_sort(rot_points)
-        if rot_points_sorted.shape[0] != n_points:
-            raise ValueError("Point count mismatch in rot attributes during decode")
         quats[:, i] = uint16_to_float(
-            rot_u16[rot_sort_idx].astype(np.float32),
+            _read_sorted_reflectance(rot_ply),
             metadata["Attribute"][f"rot_{i}"]["min"],
             metadata["Attribute"][f"rot_{i}"]["max"],
         )
@@ -694,7 +694,7 @@ def decode_gpcc(compressed_dir, output_ply_path, metadata_json_path, tmc3_path):
         output_path=output_ply_path,
     )
 
-    shutil.rmtree(temp_decode_dir)
+    shutil.rmtree(temp_decode_dir, ignore_errors=True)
     return {
         "decode_time_s": time.perf_counter() - t0,
         "num_points_output": int(n_points),

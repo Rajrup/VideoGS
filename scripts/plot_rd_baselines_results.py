@@ -37,16 +37,11 @@ PLOT_OUTPUT_DIR = str(DEFAULT_PLOTS_DIR)
 PLOT_DATASETS: list[str] | None = None
 PLOT_SEQUENCES: list[str] | None = [
     "4K_Actor1_Greeting",
-    "flame_salmon_1",
-    "sear_steak",
 ]
 PLOT_VIDEOGS_GROUP_SIZES: list[int] | None = [20]
 PLOT_FORCE_RECOLLECT = True
 
 # -- Per-sequence DracoGS sweep overrides -----------------------------------
-# Sequences listed here were run with an expanded parameter grid.
-# The collector will temporarily replace runner.SWEEP_SPACE with these ranges
-# for the specified sequences (all other sequences use the defaults).
 DRACOGS_SWEEP_OVERRIDES: dict[str, dict[str, Any]] = {
     "4K_Actor1_Greeting": dict(
         dracogs_eg=(0, 8, 10, 12, 14, 16),
@@ -75,12 +70,13 @@ LIVOGS_DATA_PATHS: dict[str, str | None] = {
 }
 LIVOGS_RD_SUBDIR: str = "livogs_rd_new"
 
-RD_BASELINES_ORDER = ["VideoGS", "LivoGS", "DracoGS", "MesonGS"]
+RD_BASELINES_ORDER = ["VideoGS", "LivoGS", "DracoGS", "MesonGS", "GPCC"]
 RD_BASELINES_STYLES: dict[str, dict[str, Any]] = {
     "VideoGS": {"color": "#d62728", "marker": "^", "alpha": 0.7, "size": 35},
     "LivoGS": {"color": "#ff7f0e", "marker": "D", "alpha": 0.7, "size": 35},
     "MesonGS": {"color": "#2ca02c", "marker": "s", "alpha": 0.45, "size": 18},
     "DracoGS": {"color": "#1f77b4", "marker": "o", "alpha": 0.45, "size": 18},
+    "GPCC": {"color": "#9467bd", "marker": "P", "alpha": 0.45, "size": 18},
 }
 
 LIVOGS_DATASET_DIR_ALIASES: dict[str, tuple[str, ...]] = {
@@ -301,6 +297,7 @@ def _load_single_frame_result(
     benchmark_csv_name: str,
     frame_id: int,
     compressed_size_field: str = "compressed_size_bytes",
+    frame_id_field: str = "frame_id",
 ) -> dict[str, Any] | None:
     benchmark_path = os.path.join(output_folder, benchmark_csv_name)
     eval_json_path = os.path.join(output_folder, "evaluation", "evaluation_results.json")
@@ -311,7 +308,7 @@ def _load_single_frame_result(
         try:
             with open(benchmark_path, newline="", encoding="utf-8") as f:
                 for row in csv.DictReader(f):
-                    if int(row["frame_id"]) == frame_id:
+                    if int(row[frame_id_field]) == frame_id:
                         comp_raw = row.get(compressed_size_field) or row.get("compressed_size_bytes")
                         if comp_raw is None:
                             break
@@ -514,6 +511,32 @@ def _collect_dracogs_rows(runner: Any, cfg: Any, sequence: str) -> list[dict[str
     return rows
 
 
+def _collect_gpcc_rows(runner: Any, cfg: Any, sequence: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for frame_id in runner._frame_ids(cfg):
+        for depth in runner.SWEEP_SPACE.gpcc_octree_depths_by_dataset[cfg.name]:
+            for qp_rest, qp_dc, qp_opacity in runner.SWEEP_SPACE.gpcc_qp_combos:
+                out = runner._gpcc_output_folder(cfg, sequence, frame_id, depth, qp_opacity, qp_dc, qp_rest)
+                row = _load_single_frame_result(
+                    out,
+                    "benchmark_gpcc.csv",
+                    frame_id,
+                    compressed_size_field="total_compressed_bytes",
+                    frame_id_field="frame_idx",
+                )
+                if row is None:
+                    continue
+                row.update(
+                    dataset=cfg.name,
+                    sequence=sequence,
+                    frame_id=frame_id,
+                    baseline="GPCC",
+                    params=f"J={depth} rest={qp_rest} dc={qp_dc} op={qp_opacity}",
+                )
+                rows.append(row)
+    return rows
+
+
 def plot_group(
     dataset: str,
     sequence: str,
@@ -657,6 +680,7 @@ def main() -> None:
             "videogs": _collect_videogs_rows,
             "mesongs": _collect_mesongs_rows,
             "dracogs": _collect_dracogs_rows,
+            "gpcc": _collect_gpcc_rows,
         }
 
         allowed_datasets = set(PLOT_DATASETS) if PLOT_DATASETS else None
@@ -666,6 +690,8 @@ def main() -> None:
         all_rows: list[dict[str, Any]] = []
         for ds_name, cfg in runner.ALL_DATASETS.items():
             if allowed_datasets is not None and ds_name not in allowed_datasets:
+                continue
+            if cfg.name not in runner.SEQUENCE_SETTINGS:
                 continue
             sequences = list(runner.SEQUENCE_SETTINGS[cfg.name])
             if allowed_sequences is not None:
