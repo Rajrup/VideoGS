@@ -27,14 +27,17 @@ from pathlib import Path
 from typing import Any, Callable, Optional, TypeVar
 
 RUN_DRY_RUN = False
-RUN_SKIP_EXISTING = True
-RUN_SKIP_SAVED_RESULTS = False
-RUN_DATASETS: tuple[str, ...] = ("HiFi4G", "N3DV")
-RUN_BASELINES: tuple[str, ...] = ("videogs", "dracogs", "mesongs")
+RUN_SKIP_COMPLETED_RUNS = True
+RUN_OVERWRITE_CSV_RES = True
 RUN_CUDA_DEVICES: tuple[str, ...] = ("0", "1")
 
 HIFI4G_DATA_ROOT = "/synology/rajrup/VideoGS"
 N3DV_DATA_ROOT = "/synology/rajrup/Queen"
+RUN_BASELINES: tuple[str, ...] = (
+    "videogs",
+    "dracogs",
+    "mesongs"
+)
 
 VIDEOGS_QP_VALUES: tuple[int, ...] = tuple(range(0, 41))
 VIDEOGS_GROUP_SIZE = 20
@@ -98,9 +101,8 @@ class SweepSpaceConfig:
 @dataclass(frozen=True)
 class RunConfig:
     dry_run: bool
-    skip_existing: bool
-    skip_saved_results: bool
-    datasets: tuple[str, ...]
+    skip_completed_runs: bool
+    overwrite_csv_res: bool
     baselines: tuple[str, ...]
     cuda_devices: tuple[str, ...]
 
@@ -175,9 +177,8 @@ ALL_DATASETS: dict[str, DatasetConfig] = {"HiFi4G": HIFI4G, "N3DV": N3DV}
 
 RUN_CONFIG = RunConfig(
     dry_run=RUN_DRY_RUN,
-    skip_existing=RUN_SKIP_EXISTING,
-    skip_saved_results=RUN_SKIP_SAVED_RESULTS,
-    datasets=RUN_DATASETS,
+    skip_completed_runs=RUN_SKIP_COMPLETED_RUNS,
+    overwrite_csv_res=RUN_OVERWRITE_CSV_RES,
     baselines=RUN_BASELINES,
     cuda_devices=RUN_CUDA_DEVICES,
 )
@@ -444,7 +445,7 @@ def run_videogs_rd(
     cfg: DatasetConfig,
     sequence: str,
     dry_run: bool,
-    skip_existing: bool,
+    skip_completed_runs: bool,
 ) -> list[tuple[str, str, str]]:
     gt = _gt_model_path(cfg, sequence)
     project_root = _project_root(cfg)
@@ -455,7 +456,7 @@ def run_videogs_rd(
         frame_id, qp = task
         fs, fe, iv = _videogs_frame_span(cfg, frame_id)
         output_folder = _videogs_output_folder(cfg, sequence, frame_id, qp)
-        if skip_existing and _output_complete(output_folder):
+        if skip_completed_runs and _output_complete(output_folder):
             log_step(f"SKIP VideoGS | {cfg.name} | {sequence} | f={frame_id} | qp={qp}")
             return failures
 
@@ -503,7 +504,7 @@ def run_mesongs_rd(
     cfg: DatasetConfig,
     sequence: str,
     dry_run: bool,
-    skip_existing: bool,
+    skip_completed_runs: bool,
 ) -> list[tuple[str, str, str]]:
     gt = _gt_model_path(cfg, sequence)
     ds = _dataset_path(cfg, sequence)
@@ -525,7 +526,7 @@ def run_mesongs_rd(
         fs, fe, iv = _frame_span(cfg, frame_id)
         output_folder = _mesongs_output_folder(cfg, sequence, frame_id, depth, num_bits, n_block, cb)
         short = f"f={frame_id} d={depth} nb={num_bits} nblk={n_block} cb={cb}"
-        if skip_existing and _output_complete(output_folder):
+        if skip_completed_runs and _output_complete(output_folder):
             log_step(f"SKIP MesonGS | {cfg.name} | {sequence} | {short}")
             return failures
 
@@ -583,7 +584,7 @@ def run_dracogs_rd(
     cfg: DatasetConfig,
     sequence: str,
     dry_run: bool,
-    skip_existing: bool,
+    skip_completed_runs: bool,
 ) -> list[tuple[str, str, str]]:
     gt = _gt_model_path(cfg, sequence)
     project_root = _project_root(cfg)
@@ -603,7 +604,7 @@ def run_dracogs_rd(
         fs, fe, iv = _frame_span(cfg, frame_id)
         output_folder = _dracogs_output_folder(cfg, sequence, frame_id, eg, eo, et, es)
         short = f"f={frame_id} eg={eg} eo={eo} et={et} es={es}"
-        if skip_existing and _output_complete(output_folder):
+        if skip_completed_runs and _output_complete(output_folder):
             log_step(f"SKIP DracoGS | {cfg.name} | {sequence} | {short}")
             return failures
 
@@ -905,9 +906,9 @@ CSV_COLUMNS = [
 ]
 
 
-def write_results_csv(rows: list[dict[str, Any]], path: str, skip_saved_results: bool) -> None:
+def write_results_csv(rows: list[dict[str, Any]], path: str, overwrite_csv_res: bool) -> None:
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    if skip_saved_results and os.path.isfile(path):
+    if not overwrite_csv_res and os.path.isfile(path):
         print(f"  SKIP saved CSV (exists): {path}")
         return
 
@@ -919,9 +920,9 @@ def write_results_csv(rows: list[dict[str, Any]], path: str, skip_saved_results:
     print(f"  Wrote {len(rows)} rows to: {path}")
 
 
-def write_run_summary(summary: dict[str, Any], skip_saved_results: bool) -> None:
+def write_run_summary(summary: dict[str, Any], overwrite_csv_res: bool) -> None:
     os.makedirs(str(RD_BASELINES_RESULTS_ROOT), exist_ok=True)
-    if skip_saved_results and RD_BASELINES_RUN_SUMMARY_JSON.is_file():
+    if not overwrite_csv_res and RD_BASELINES_RUN_SUMMARY_JSON.is_file():
         print(f"  SKIP saved summary (exists): {RD_BASELINES_RUN_SUMMARY_JSON}")
         return
     with open(RD_BASELINES_RUN_SUMMARY_JSON, "w", encoding="utf-8") as f:
@@ -968,11 +969,11 @@ def _combo_counts(cfg: DatasetConfig, baselines: list[str], n_sequences: int, n_
 def main() -> None:
     run_start = time.time()
 
-    datasets = list(RUN_CONFIG.datasets)
+    datasets = list(SEQUENCE_SETTINGS.keys())
     baselines = list(RUN_CONFIG.baselines)
     dry_run = bool(RUN_CONFIG.dry_run)
-    skip_saved_results = bool(RUN_CONFIG.skip_saved_results)
-    effective_skip_existing = bool(RUN_CONFIG.skip_existing or skip_saved_results)
+    overwrite_csv_res = bool(RUN_CONFIG.overwrite_csv_res)
+    effective_skip_completed = bool(RUN_CONFIG.skip_completed_runs or not overwrite_csv_res)
 
     _validate_selected_items(datasets, set(ALL_DATASETS.keys()), "dataset")
     _validate_selected_items(baselines, set(BASELINE_RUNNERS.keys()), "baseline")
@@ -983,8 +984,8 @@ def main() -> None:
     print(f"  Baselines:           {', '.join(baselines)}")
     print(f"  CUDA devices:        {', '.join(RUN_CONFIG.cuda_devices)}")
     print(f"  Output root:         {RD_BASELINES_RESULTS_ROOT}")
-    print(f"  skip-existing:       {effective_skip_existing}")
-    print(f"  skip-saved-results:  {skip_saved_results}")
+    print(f"  skip-completed-runs:  {effective_skip_completed}")
+    print(f"  overwrite-csv-res:    {overwrite_csv_res}")
     print("  Collection:          delegated to plot_rd_baselines_results.py")
     if dry_run:
         print("  Mode:                DRY RUN")
@@ -1009,7 +1010,7 @@ def main() -> None:
                 log_header(f"{cfg.name} | {sequence}")
                 runner = BASELINE_RUNNERS[baseline]
                 step_start = time.time()
-                failures = runner(cfg, sequence, dry_run, effective_skip_existing)
+                failures = runner(cfg, sequence, dry_run, effective_skip_completed)
                 failed_runs.extend(failures)
                 elapsed = int(time.time() - step_start)
                 print(f"  {baseline.upper()} | {cfg.name} | {sequence} completed in {elapsed}s")
@@ -1019,13 +1020,13 @@ def main() -> None:
         "finished": timestamp(),
         "datasets": datasets,
         "baselines": baselines,
-        "skip_existing": effective_skip_existing,
-        "skip_saved_results": skip_saved_results,
+        "skip_completed_runs": effective_skip_completed,
+        "overwrite_csv_res": overwrite_csv_res,
         "dry_run": dry_run,
         "total_seconds": total_sec,
         "failed_runs": [{"dataset": d, "baseline": b, "sequence": s} for d, b, s in failed_runs],
     }
-    write_run_summary(summary, skip_saved_results)
+    write_run_summary(summary, overwrite_csv_res)
 
     log_header("Done")
     print(f"  Finished:    {timestamp()}")
