@@ -8,6 +8,7 @@ import glob
 import os
 import sys
 from collections import defaultdict
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -32,9 +33,38 @@ DEFAULT_PLOTS_DIR = RD_BASELINES_RESULTS_ROOT / "plots"
 PLOT_CSV_PATH = str(DEFAULT_CSV)
 PLOT_OUTPUT_DIR = str(DEFAULT_PLOTS_DIR)
 PLOT_DATASETS: list[str] | None = None
-PLOT_SEQUENCES: list[str] | None = None
+PLOT_SEQUENCES: list[str] | None = [
+    "4K_Actor1_Greeting",
+    "flame_salmon_1",
+    "sear_steak",
+]
 PLOT_VIDEOGS_GROUP_SIZES: list[int] | None = [20]
 PLOT_FORCE_RECOLLECT = True
+
+# -- Per-sequence DracoGS sweep overrides -----------------------------------
+# Sequences listed here were run with an expanded parameter grid.
+# The collector will temporarily replace runner.SWEEP_SPACE with these ranges
+# for the specified sequences (all other sequences use the defaults).
+DRACOGS_SWEEP_OVERRIDES: dict[str, dict[str, Any]] = {
+    "4K_Actor1_Greeting": dict(
+        dracogs_eg=(0, 8, 10, 12, 14, 16),
+        dracogs_eo=(0, 8, 10, 12, 14, 16),
+        dracogs_et=(0, 8, 10, 12, 14, 16),
+        dracogs_es=(0, 8, 10, 12, 14, 16),
+    ),
+    "flame_salmon_1": dict(
+        dracogs_eg=(0, 8, 10, 12, 14, 16),
+        dracogs_eo=(0, 8, 10, 12, 14, 16),
+        dracogs_et=(0, 8, 10, 12, 14, 16),
+        dracogs_es=(0, 8, 10, 12, 14, 16),
+    ),
+    "sear_steak": dict(
+        dracogs_eg=(0, 8, 10, 12, 14, 16),
+        dracogs_eo=(0, 8, 10, 12, 14, 16),
+        dracogs_et=(0, 8, 10, 12, 14, 16),
+        dracogs_es=(0, 8, 10, 12, 14, 16),
+    ),
+}
 
 # -- LivoGS hull overlay ---------------------------------------------------
 LIVOGS_DATA_PATHS: dict[str, str | None] = {
@@ -43,7 +73,12 @@ LIVOGS_DATA_PATHS: dict[str, str | None] = {
 }
 LIVOGS_RD_SUBDIR: str = "livogs_rd_new"
 
-RD_BASELINES_ORDER = ["VideoGS", "LivoGS", "DracoGS", "MesonGS"]
+RD_BASELINES_ORDER = [
+    "VideoGS", 
+    "LivoGS", 
+    "DracoGS",
+    "MesonGS"
+]
 RD_BASELINES_STYLES: dict[str, dict[str, Any]] = {
     "VideoGS": {"color": "#d62728", "marker": "^", "alpha": 0.7, "size": 35},
     "LivoGS":  {"color": "#ff7f0e", "marker": "D", "alpha": 0.7, "size": 35},
@@ -290,10 +325,26 @@ def plot_group(
     print(f"Saved: {out_path}")
 
 
+@contextmanager
+def _dracogs_sweep_override(runner_module: Any, sequence: str):
+    overrides = DRACOGS_SWEEP_OVERRIDES.get(sequence)
+    if not overrides:
+        yield
+        return
+    from dataclasses import replace as _replace
+    original = runner_module.SWEEP_SPACE
+    runner_module.SWEEP_SPACE = _replace(original, **overrides)
+    try:
+        yield
+    finally:
+        runner_module.SWEEP_SPACE = original
+
+
 def _collect_baselines_to_csv(
     csv_path: str,
     selected_datasets: list[str] | None,
     selected_sequences: list[str] | None,
+    selected_videogs_group_sizes: list[int] | None = None,
 ) -> None:
     import importlib.util
 
@@ -308,6 +359,7 @@ def _collect_baselines_to_csv(
 
     allowed_datasets = set(selected_datasets) if selected_datasets else None
     allowed_sequences = set(selected_sequences) if selected_sequences else None
+    videogs_allowed = set(selected_videogs_group_sizes) if selected_videogs_group_sizes is not None else None
 
     all_rows: list[dict[str, Any]] = []
     for ds_name, cfg in runner.ALL_DATASETS.items():
@@ -317,11 +369,19 @@ def _collect_baselines_to_csv(
         if allowed_sequences is not None:
             sequences = [sequence for sequence in sequences if sequence in allowed_sequences]
         for sequence in sequences:
-            for bl_key, collector in runner.BASELINE_COLLECTORS.items():
-                rows = collector(cfg, sequence)
-                all_rows.extend(rows)
-                if rows:
-                    print(f"  Collected {cfg.name} | {sequence} | {bl_key}: {len(rows)} rows")
+            with _dracogs_sweep_override(runner, sequence):
+                for bl_key, collector in runner.BASELINE_COLLECTORS.items():
+                    rows = collector(cfg, sequence)
+                    if videogs_allowed is not None:
+                        rows = [
+                            r
+                            for r in rows
+                            if str(r.get("baseline", "")) != "VideoGS"
+                            or r.get("group_size") in videogs_allowed
+                        ]
+                    all_rows.extend(rows)
+                    if rows:
+                        print(f"  Collected {cfg.name} | {sequence} | {bl_key}: {len(rows)} rows")
 
     os.makedirs(os.path.dirname(os.path.abspath(csv_path)), exist_ok=True)
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
@@ -334,44 +394,98 @@ def _collect_baselines_to_csv(
 
 def main() -> None:
     csv_path = PLOT_CSV_PATH
-
-    if PLOT_FORCE_RECOLLECT:
-        print("Re-collecting baseline results ...")
-        _collect_baselines_to_csv(csv_path, PLOT_DATASETS, PLOT_SEQUENCES)
-
-    if not os.path.isfile(csv_path):
-        raise FileNotFoundError(f"CSV not found: {csv_path}")
-
-    rows = read_rows(csv_path)
-    if PLOT_DATASETS:
-        allowed = set(PLOT_DATASETS)
-        rows = [r for r in rows if str(r.get("dataset", "")) in allowed]
-    if PLOT_SEQUENCES:
-        allowed = set(PLOT_SEQUENCES)
-        rows = [r for r in rows if str(r.get("sequence", "")) in allowed]
-    if PLOT_VIDEOGS_GROUP_SIZES is not None:
-        allowed = set(PLOT_VIDEOGS_GROUP_SIZES)
-        rows = [
-            r
-            for r in rows
-            if str(r.get("baseline", "")) != "VideoGS" or r.get("group_size") in allowed
-        ]
-
-    groups: dict[tuple[str, str, int], list[dict[str, Any]]] = defaultdict(list)
-    for row in rows:
-        key = (
-            str(row.get("dataset", "")),
-            str(row.get("sequence", "")),
-            int(row.get("frame_id", 0)),
-        )
-        groups[key].append(row)
-
     os.makedirs(PLOT_OUTPUT_DIR, exist_ok=True)
     print(f"Input CSV:  {csv_path}")
     print(f"Output dir: {PLOT_OUTPUT_DIR}")
-    print(f"Groups:     {len(groups)}")
-    for (dataset, sequence, frame_id), group_rows in sorted(groups.items()):
-        plot_group(dataset, sequence, frame_id, group_rows, PLOT_OUTPUT_DIR)
+
+    if PLOT_FORCE_RECOLLECT:
+        print("Re-collecting baseline results ...")
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "run_rd_baselines_experiments",
+            str(SCRIPTS_DIR / "run_rd_baselines_experiments.py"),
+        )
+        assert spec is not None and spec.loader is not None
+        runner = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = runner
+        spec.loader.exec_module(runner)
+
+        allowed_datasets = set(PLOT_DATASETS) if PLOT_DATASETS else None
+        allowed_sequences = set(PLOT_SEQUENCES) if PLOT_SEQUENCES else None
+        videogs_allowed = set(PLOT_VIDEOGS_GROUP_SIZES) if PLOT_VIDEOGS_GROUP_SIZES is not None else None
+
+        all_rows: list[dict[str, Any]] = []
+        for ds_name, cfg in runner.ALL_DATASETS.items():
+            if allowed_datasets is not None and ds_name not in allowed_datasets:
+                continue
+            sequences = list(runner.SEQUENCE_SETTINGS[cfg.name])
+            if allowed_sequences is not None:
+                sequences = [seq for seq in sequences if seq in allowed_sequences]
+            for sequence in sequences:
+                seq_rows: list[dict[str, Any]] = []
+                with _dracogs_sweep_override(runner, sequence):
+                    for bl_key, collector in runner.BASELINE_COLLECTORS.items():
+                        rows = collector(cfg, sequence)
+                        seq_rows.extend(rows)
+                        if rows:
+                            print(f"  Collected {cfg.name} | {sequence} | {bl_key}: {len(rows)} rows")
+
+                # -- plot this sequence immediately --
+                plot_rows = seq_rows
+                if videogs_allowed is not None:
+                    plot_rows = [
+                        r for r in plot_rows
+                        if str(r.get("baseline", "")) != "VideoGS"
+                        or r.get("group_size") in videogs_allowed
+                    ]
+                all_rows.extend(plot_rows)
+                groups: dict[tuple[str, str, int], list[dict[str, Any]]] = defaultdict(list)
+                for row in plot_rows:
+                    key = (
+                        str(row.get("dataset", "")),
+                        str(row.get("sequence", "")),
+                        int(row.get("frame_id", 0)),
+                    )
+                    groups[key].append(row)
+                for (dataset, seq, frame_id), group_rows in sorted(groups.items()):
+                    plot_group(dataset, seq, frame_id, group_rows, PLOT_OUTPUT_DIR)
+
+        # write accumulated CSV
+        os.makedirs(os.path.dirname(os.path.abspath(csv_path)), exist_ok=True)
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=runner.CSV_COLUMNS, extrasaction="ignore")
+            writer.writeheader()
+            for row in all_rows:
+                writer.writerow(row)
+        print(f"  Collected {len(all_rows)} total rows -> {csv_path}")
+    else:
+        if not os.path.isfile(csv_path):
+            raise FileNotFoundError(f"CSV not found: {csv_path}")
+        rows = read_rows(csv_path)
+        if PLOT_DATASETS:
+            allowed = set(PLOT_DATASETS)
+            rows = [r for r in rows if str(r.get("dataset", "")) in allowed]
+        if PLOT_SEQUENCES:
+            allowed = set(PLOT_SEQUENCES)
+            rows = [r for r in rows if str(r.get("sequence", "")) in allowed]
+        if PLOT_VIDEOGS_GROUP_SIZES is not None:
+            allowed = set(PLOT_VIDEOGS_GROUP_SIZES)
+            rows = [
+                r
+                for r in rows
+                if str(r.get("baseline", "")) != "VideoGS" or r.get("group_size") in allowed
+            ]
+        groups: dict[tuple[str, str, int], list[dict[str, Any]]] = defaultdict(list)
+        for row in rows:
+            key = (
+                str(row.get("dataset", "")),
+                str(row.get("sequence", "")),
+                int(row.get("frame_id", 0)),
+            )
+            groups[key].append(row)
+        for (dataset, sequence, frame_id), group_rows in sorted(groups.items()):
+            plot_group(dataset, sequence, frame_id, group_rows, PLOT_OUTPUT_DIR)
 
 
 if __name__ == "__main__":

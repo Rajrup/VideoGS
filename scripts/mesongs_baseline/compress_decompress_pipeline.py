@@ -19,12 +19,14 @@ import csv
 import json
 import time
 import argparse
+import re
 import numpy as np
 import torch
 from torch import nn
 from tqdm import tqdm
 from pathlib import Path
 from PIL import Image
+from typing import Any
 
 # --- sys.path setup: MesonGS root must be on path (for raht_torch etc.) ---
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -52,6 +54,9 @@ DEFAULT_NUM_BITS = 8
 DEFAULT_N_BLOCK = 57
 DEFAULT_CODEBOOK_SIZE = 2048
 DEFAULT_PRUNE_PERCENT = 0.0
+
+_FRAME_SPAN_TAG_RE = re.compile(r"^frames_\d+_\d+_int_\d+$")
+_FRAME_DIR_TAG_RE = re.compile(r"^frame\d+$")
 
 hifi4g_config = {
     'prune': {
@@ -204,6 +209,50 @@ def save_decoded_ply(decoded_gaussians, output_path):
     decoded_gaussians.save_ply(output_path)
 
 
+def resolve_config_root(output_folder):
+    output_path = Path(output_folder)
+    if _FRAME_SPAN_TAG_RE.match(output_path.name) or _FRAME_DIR_TAG_RE.match(output_path.name):
+        return output_path.parent
+    return output_path
+
+
+def write_single_frame_benchmark_csv(csv_path: Path, benchmark_row: dict[str, Any]) -> None:
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with csv_path.open("w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow([
+            "frame_id",
+            "total_encode_ms",
+            "total_decode_ms",
+            "original_points",
+            "after_prune_points",
+            "after_octree_points",
+            "decoded_points",
+            "uncompressed_size_bytes",
+            "compressed_size_bytes",
+        ])
+        w.writerow([
+            int(benchmark_row["frame"]),
+            f"{float(benchmark_row['total_encode_ms']):.2f}",
+            f"{float(benchmark_row['total_decode_ms']):.2f}",
+            int(benchmark_row["original_points"]),
+            int(benchmark_row["after_prune_points"]),
+            int(benchmark_row["after_octree_points"]),
+            int(benchmark_row["decoded_points"]),
+            int(benchmark_row["uncompressed_size_bytes"]),
+            int(benchmark_row["compressed_size_bytes"]),
+        ])
+
+
+def write_single_frame_config_json(config_path: Path, config_template: dict[str, Any], frame_id: int) -> None:
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    out = dict(config_template)
+    out["frame_list"] = [int(frame_id)]
+    out["frame_id"] = int(frame_id)
+    with config_path.open("w") as f:
+        json.dump(out, f, indent=4)
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -250,6 +299,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    config_root = resolve_config_root(args.output_folder)
     # --- Load config (from hifi4g_config, overridable by CLI) ---
     scene = args.scene_name
     if scene not in hifi4g_config['depth']:
@@ -403,6 +453,12 @@ if __name__ == "__main__":
             ply_out_path = os.path.join(frame_ply_folder, "point_cloud.ply")
             save_decoded_ply(decoded_gaussians, ply_out_path)
 
+            canonical_frame_ply_folder = config_root / f"frame{frame}" / "decompressed_ply" / str(frame) / "point_cloud"
+            canonical_frame_ply_folder.mkdir(parents=True, exist_ok=True)
+            canonical_ply_out_path = canonical_frame_ply_folder / "point_cloud.ply"
+            if str(canonical_ply_out_path) != ply_out_path:
+                save_decoded_ply(decoded_gaussians, str(canonical_ply_out_path))
+
         benchmark_rows.append({
             "frame": frame,
             "total_encode_ms": encode_time_ms,
@@ -475,6 +531,12 @@ if __name__ == "__main__":
         with open(os.path.join(args.output_folder, "mesongs_config.json"), "w") as f:
             json.dump(config_out, f, indent=4)
 
+        for row in benchmark_rows:
+            frame_id = int(row["frame"])
+            frame_root = config_root / f"frame{frame_id}"
+            write_single_frame_benchmark_csv(frame_root / "benchmark_mesongs.csv", row)
+            write_single_frame_config_json(frame_root / "mesongs_config.json", config_out, frame_id)
+
         print("\n" + "=" * 70)
         print("Benchmark Summary (MesonGS compress + decompress)")
         print("=" * 70)
@@ -486,6 +548,9 @@ if __name__ == "__main__":
         print(f"  Compression ratio:         {total_uncomp / total_comp:.2f}x")
         print(f"  Avg point flow:            {total_orig_points / n:.0f} → {total_octree_points / n:.0f} octree → {total_decoded_points / n:.0f} decoded")
         print(f"  CSV: {csv_path}")
+        print(f"  Canonical frame root:      {config_root}")
+        if args.output_ply_folder is not None:
+            print(f"  Canonical PLY layout:      {config_root}/frame*/decompressed_ply")
         print("=" * 70)
     else:
         print("No frames were processed.")

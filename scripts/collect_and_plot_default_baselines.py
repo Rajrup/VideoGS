@@ -50,6 +50,11 @@ BASELINES: dict[str, dict[str, Any]] = {
     },
 }
 
+PLOT_YLIM: dict[str, tuple[float, float]] = {
+    "PSNR": (30, 40),
+    "SSIM": (0.95, 1.0),
+}
+
 BASELINE_STYLES: dict[str, dict[str, Any]] = {
     "DracoGS": {"color": "#1f77b4", "marker": "o", "label": "DracoGS"},
     "MesonGS": {"color": "#2ca02c", "marker": "s", "label": "MesonGS"},
@@ -150,6 +155,10 @@ def _frame_span_tag(frame_start: int, frame_end: int, interval: int) -> str:
     return f"frames_{frame_start}_{frame_end - 1}_int_{interval}"
 
 
+def _frame_output_tag(frame_id: int) -> str:
+    return f"frame{int(frame_id)}"
+
+
 def _candidate_output_folders(
     sequence: str,
     subdir: str,
@@ -157,12 +166,54 @@ def _candidate_output_folders(
     frame_start: int,
     frame_end: int,
     interval: int,
+    frame_id: Optional[int] = None,
 ) -> list[str]:
     legacy_root = os.path.join(_model_root(sequence), "compression", subdir, output_tag)
-    return [
-        os.path.join(legacy_root, _frame_span_tag(frame_start, frame_end, interval)),
-        legacy_root,
-    ]
+    candidates: list[str] = []
+    if frame_id is not None:
+        candidates.extend(
+            [
+                os.path.join(legacy_root, _frame_output_tag(frame_id)),
+                os.path.join(legacy_root, "frame_results"),
+            ]
+        )
+    candidates.extend(
+        [
+            os.path.join(legacy_root, _frame_span_tag(frame_start, frame_end, interval)),
+            legacy_root,
+        ]
+    )
+    return candidates
+
+
+def _folder_has_frame_data(folder: str, benchmark_csv_name: str, frame_id: int) -> bool:
+    benchmark_path = os.path.join(folder, benchmark_csv_name)
+    eval_json_path = os.path.join(folder, "evaluation", "evaluation_results.json")
+
+    has_benchmark = False
+    if os.path.isfile(benchmark_path):
+        try:
+            with open(benchmark_path, newline="", encoding="utf-8") as f:
+                for row in csv.DictReader(f):
+                    if int(row.get("frame_id", -1)) == frame_id:
+                        has_benchmark = True
+                        break
+        except (OSError, ValueError):
+            pass
+
+    has_eval = False
+    if os.path.isfile(eval_json_path):
+        try:
+            with open(eval_json_path, encoding="utf-8") as f:
+                eval_data = json.load(f)
+            for fr in eval_data.get("per_frame", []):
+                if int(fr.get("frame", -1)) == frame_id:
+                    has_eval = True
+                    break
+        except (OSError, json.JSONDecodeError, ValueError):
+            pass
+
+    return has_benchmark or has_eval
 
 
 def _resolve_output_folder(
@@ -173,6 +224,7 @@ def _resolve_output_folder(
     frame_end: int,
     interval: int,
     benchmark_csv_name: str,
+    frame_id: Optional[int] = None,
 ) -> str:
     for folder in _candidate_output_folders(
         sequence,
@@ -181,11 +233,16 @@ def _resolve_output_folder(
         frame_start,
         frame_end,
         interval,
+        frame_id=frame_id,
     ):
-        benchmark_path = os.path.join(folder, benchmark_csv_name)
-        eval_json_path = os.path.join(folder, "evaluation", "evaluation_results.json")
-        if os.path.isfile(benchmark_path) or os.path.isfile(eval_json_path):
-            return folder
+        if frame_id is not None:
+            if _folder_has_frame_data(folder, benchmark_csv_name, frame_id):
+                return folder
+        else:
+            benchmark_path = os.path.join(folder, benchmark_csv_name)
+            eval_json_path = os.path.join(folder, "evaluation", "evaluation_results.json")
+            if os.path.isfile(benchmark_path) or os.path.isfile(eval_json_path):
+                return folder
 
     return _candidate_output_folders(
         sequence,
@@ -194,6 +251,7 @@ def _resolve_output_folder(
         frame_start,
         frame_end,
         interval,
+        frame_id=frame_id,
     )[0]
 
 
@@ -399,26 +457,28 @@ def collect_all_results() -> list[dict[str, Any]]:
                             )
                         )
                 else:
-                    output_folder = _resolve_output_folder(
-                        sequence,
-                        cfg["subdir"],
-                        str(output_tag),
-                        frame_start,
-                        frame_end,
-                        interval,
-                        cfg["benchmark_csv"],
-                    )
-                    rows.extend(
-                        _load_sequence_results(
-                            output_folder,
+                    for fid in frame_ids:
+                        output_folder = _resolve_output_folder(
                             sequence,
-                            baseline_label,
-                            baseline_family,
-                            videogs_qp,
+                            cfg["subdir"],
+                            str(output_tag),
+                            frame_start,
+                            frame_end,
+                            interval,
                             cfg["benchmark_csv"],
-                            frame_ids,
+                            frame_id=int(fid),
                         )
-                    )
+                        rows.extend(
+                            _load_sequence_results(
+                                output_folder,
+                                sequence,
+                                baseline_label,
+                                baseline_family,
+                                videogs_qp,
+                                cfg["benchmark_csv"],
+                                [int(fid)],
+                            )
+                        )
     return rows
 
 
@@ -565,6 +625,7 @@ def plot_quality_by_sequence(
     ylabel: str,
     title: str,
     filename: str,
+    ylim: Optional[tuple[float, float]] = None,
 ) -> None:
     """Grouped bar chart — quality metric per sequence + average."""
     sequences = list(dict.fromkeys(r["sequence_name"] for r in rows))
@@ -630,6 +691,8 @@ def plot_quality_by_sequence(
 
     ax.set_xticks(x)
     ax.set_xticklabels(x_labels, rotation=30, ha="right", fontsize=9)
+    if ylim is not None:
+        ax.set_ylim(ylim)
     ax.set_ylabel(ylabel, fontsize=11)
     ax.set_title(title, fontsize=13)
     ax.legend(fontsize=9)
@@ -686,10 +749,12 @@ def main() -> None:
     plot_quality_by_sequence(
         rows, plot_dir, "decomp_psnr", "gt_psnr",
         "PSNR (dB)", "PSNR by Sequence", "psnr_by_sequence.png",
+        ylim=PLOT_YLIM.get("PSNR"),
     )
     plot_quality_by_sequence(
         rows, plot_dir, "decomp_ssim", "gt_ssim",
         "SSIM", "SSIM by Sequence", "ssim_by_sequence.png",
+        ylim=PLOT_YLIM.get("SSIM"),
     )
 
     print(f"\n{sep}")

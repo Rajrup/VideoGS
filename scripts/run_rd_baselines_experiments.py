@@ -246,6 +246,10 @@ def _frame_span_tag(cfg: DatasetConfig, frame_id: int) -> str:
     return f"frames_{fs}_{fe}_int_{iv}"
 
 
+def _frame_output_tag(frame_id: int) -> str:
+    return f"frame{int(frame_id)}"
+
+
 def _videogs_frame_span_tag(cfg: DatasetConfig, frame_id: int) -> str:
     fs, fe, iv = _videogs_frame_span(cfg, frame_id)
     return f"frames_{fs}_{fe - 1}_int_{iv}"
@@ -271,10 +275,36 @@ def _mesongs_output_folder(
     cb: int,
 ) -> str:
     params_tag = f"d{depth}_nb{num_bits}_nblk{n_block}_cb{cb}"
+    return str(_model_root(cfg, sequence) / "compression" / "mesongs" / params_tag / _frame_output_tag(frame_id))
+
+
+def _mesongs_legacy_output_folder(
+    cfg: DatasetConfig,
+    sequence: str,
+    frame_id: int,
+    depth: int,
+    num_bits: int,
+    n_block: int,
+    cb: int,
+) -> str:
+    params_tag = f"d{depth}_nb{num_bits}_nblk{n_block}_cb{cb}"
     return str(_model_root(cfg, sequence) / "compression" / "mesongs" / params_tag / _frame_span_tag(cfg, frame_id))
 
 
 def _dracogs_output_folder(
+    cfg: DatasetConfig,
+    sequence: str,
+    frame_id: int,
+    eg: int,
+    eo: int,
+    et: int,
+    es: int,
+) -> str:
+    params_tag = f"eg_{eg}_eo_{eo}_et_{et}_es_{es}_cl_{SWEEP_SPACE.dracogs_cl}"
+    return str(_model_root(cfg, sequence) / "compression" / "dracogs" / params_tag / _frame_output_tag(frame_id))
+
+
+def _dracogs_legacy_output_folder(
     cfg: DatasetConfig,
     sequence: str,
     frame_id: int,
@@ -702,16 +732,17 @@ def collect_videogs(cfg: DatasetConfig, sequence: str) -> list[dict[str, Any]]:
 
     frame_tag_re = re.compile(r"^frames_(\d+)_(\d+)_int_(\d+)$")
 
-    def infer_group_size_from_tag(out_path: Path) -> Optional[int]:
+    def parse_frame_tag(out_path: Path) -> tuple[Optional[int], Optional[int], Optional[int], Optional[int]]:
         m = frame_tag_re.match(out_path.name)
         if m is None:
-            return None
+            return None, None, None, None
         start = int(m.group(1))
         end = int(m.group(2))
         interval = int(m.group(3))
         if interval <= 0 or end < start:
-            return None
-        return ((end - start) // interval) + 1
+            return start, end, interval, None
+        group_size = ((end - start) // interval) + 1
+        return start, end, interval, group_size
 
     def discover_output_folders_for_qp(qp: int, frame_id: int) -> list[tuple[str, Optional[int]]]:
         qp_root = _model_root(cfg, sequence) / "compression" / "videogs" / f"qp_{qp}"
@@ -721,7 +752,12 @@ def collect_videogs(cfg: DatasetConfig, sequence: str) -> list[dict[str, Any]]:
             for out_dir in sorted(glob.glob(str(qp_root / "frames_*_int_*"))):
                 out_path = Path(out_dir)
                 config_path = out_path / "videogs_config.json"
-                detected_group_size = infer_group_size_from_tag(out_path)
+                detected_frame_start_from_tag, _, _, detected_group_size = parse_frame_tag(out_path)
+                if (
+                    detected_frame_start_from_tag is not None
+                    and detected_frame_start_from_tag != frame_id
+                ):
+                    continue
                 detected_frame_start: Optional[int] = None
                 if config_path.is_file():
                     try:
@@ -787,6 +823,17 @@ def collect_mesongs(cfg: DatasetConfig, sequence: str) -> list[dict[str, Any]]:
             out = _mesongs_output_folder(cfg, sequence, frame_id, depth, num_bits, n_block, cb)
             row = _load_single_frame_result(out, BENCHMARK_CSV_NAMES["mesongs"], frame_id)
             if row is None:
+                legacy_out = _mesongs_legacy_output_folder(
+                    cfg,
+                    sequence,
+                    frame_id,
+                    depth,
+                    num_bits,
+                    n_block,
+                    cb,
+                )
+                row = _load_single_frame_result(legacy_out, BENCHMARK_CSV_NAMES["mesongs"], frame_id)
+            if row is None:
                 continue
             row.update(
                 dataset=cfg.name,
@@ -810,6 +857,17 @@ def collect_dracogs(cfg: DatasetConfig, sequence: str) -> list[dict[str, Any]]:
         ):
             out = _dracogs_output_folder(cfg, sequence, frame_id, eg, eo, et, es)
             row = _load_single_frame_result(out, BENCHMARK_CSV_NAMES["dracogs"], frame_id)
+            if row is None:
+                legacy_out = _dracogs_legacy_output_folder(
+                    cfg,
+                    sequence,
+                    frame_id,
+                    eg,
+                    eo,
+                    et,
+                    es,
+                )
+                row = _load_single_frame_result(legacy_out, BENCHMARK_CSV_NAMES["dracogs"], frame_id)
             if row is None:
                 continue
             row.update(
