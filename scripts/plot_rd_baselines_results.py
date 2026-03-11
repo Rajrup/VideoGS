@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import csv
 import glob
+import json
 import os
+import re
 import sys
 from collections import defaultdict
 from contextlib import contextmanager
@@ -73,15 +75,10 @@ LIVOGS_DATA_PATHS: dict[str, str | None] = {
 }
 LIVOGS_RD_SUBDIR: str = "livogs_rd_new"
 
-RD_BASELINES_ORDER = [
-    "VideoGS", 
-    "LivoGS", 
-    "DracoGS",
-    "MesonGS"
-]
+RD_BASELINES_ORDER = ["VideoGS", "LivoGS", "DracoGS", "MesonGS"]
 RD_BASELINES_STYLES: dict[str, dict[str, Any]] = {
     "VideoGS": {"color": "#d62728", "marker": "^", "alpha": 0.7, "size": 35},
-    "LivoGS":  {"color": "#ff7f0e", "marker": "D", "alpha": 0.7, "size": 35},
+    "LivoGS": {"color": "#ff7f0e", "marker": "D", "alpha": 0.7, "size": 35},
     "MesonGS": {"color": "#2ca02c", "marker": "s", "alpha": 0.45, "size": 18},
     "DracoGS": {"color": "#1f77b4", "marker": "o", "alpha": 0.45, "size": 18},
 }
@@ -100,6 +97,22 @@ LIVOGS_SEQUENCE_DIR_ALIASES: dict[str, tuple[str, ...]] = {
     "HiFi4G": (),
     "N3DV": ("queen_compressed_{sequence}",),
 }
+
+COLLECTED_CSV_COLUMNS = [
+    "dataset",
+    "sequence",
+    "frame_id",
+    "baseline",
+    "params",
+    "group_size",
+    "compressed_size_bytes",
+    "compressed_mb",
+    "uncompressed_size_bytes",
+    "decomp_psnr",
+    "decomp_ssim",
+    "gt_psnr",
+    "gt_ssim",
+]
 
 
 def _to_float(raw: str | None) -> float | None:
@@ -222,6 +235,285 @@ def _load_livogs_hull_points(csv_path: str) -> list[tuple[float, float]]:
     return points
 
 
+def _load_runner_module() -> Any:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "run_rd_baselines_experiments",
+        str(SCRIPTS_DIR / "run_rd_baselines_experiments.py"),
+    )
+    assert spec is not None and spec.loader is not None
+    runner = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = runner
+    spec.loader.exec_module(runner)
+    return runner
+
+
+def _frame_span_tag(runner: Any, cfg: Any, frame_id: int) -> str:
+    fs, fe, iv = runner._frame_span(cfg, frame_id)
+    if cfg.frame_end_exclusive:
+        return f"frames_{fs}_{fe - 1}_int_{iv}"
+    return f"frames_{fs}_{fe}_int_{iv}"
+
+
+def _mesongs_legacy_output_folder(
+    runner: Any,
+    cfg: Any,
+    sequence: str,
+    frame_id: int,
+    depth: int,
+    num_bits: int,
+    n_block: int,
+    cb: int,
+) -> str:
+    params_tag = f"d{depth}_nb{num_bits}_nblk{n_block}_cb{cb}"
+    return str(
+        runner._model_root(cfg, sequence)
+        / "compression"
+        / "mesongs"
+        / params_tag
+        / _frame_span_tag(runner, cfg, frame_id)
+    )
+
+
+def _dracogs_legacy_output_folder(
+    runner: Any,
+    cfg: Any,
+    sequence: str,
+    frame_id: int,
+    eg: int,
+    eo: int,
+    et: int,
+    es: int,
+) -> str:
+    params_tag = f"eg_{eg}_eo_{eo}_et_{et}_es_{es}_cl_{runner.SWEEP_SPACE.dracogs_cl}"
+    return str(
+        runner._model_root(cfg, sequence)
+        / "compression"
+        / "dracogs"
+        / params_tag
+        / _frame_span_tag(runner, cfg, frame_id)
+    )
+
+
+def _load_single_frame_result(
+    output_folder: str,
+    benchmark_csv_name: str,
+    frame_id: int,
+    compressed_size_field: str = "compressed_size_bytes",
+) -> dict[str, Any] | None:
+    benchmark_path = os.path.join(output_folder, benchmark_csv_name)
+    eval_json_path = os.path.join(output_folder, "evaluation", "evaluation_results.json")
+
+    compressed_bytes: int | None = None
+    uncompressed_bytes = 0
+    if os.path.isfile(benchmark_path):
+        try:
+            with open(benchmark_path, newline="", encoding="utf-8") as f:
+                for row in csv.DictReader(f):
+                    if int(row["frame_id"]) == frame_id:
+                        comp_raw = row.get(compressed_size_field) or row.get("compressed_size_bytes")
+                        if comp_raw is None:
+                            break
+                        compressed_bytes = int(comp_raw)
+                        uncompressed_bytes = int(row.get("uncompressed_size_bytes", 0))
+                        break
+        except (OSError, KeyError, ValueError):
+            pass
+
+    decomp_psnr: float | None = None
+    decomp_ssim: float | None = None
+    gt_psnr: float | None = None
+    gt_ssim: float | None = None
+    if os.path.isfile(eval_json_path):
+        try:
+            with open(eval_json_path, encoding="utf-8") as f:
+                eval_data = json.load(f)
+            for fr in eval_data.get("per_frame", []):
+                if int(fr["frame"]) == frame_id:
+                    decomp_psnr = float(fr["decomp_psnr"])
+                    decomp_ssim = float(fr["decomp_ssim"])
+                    gt_psnr = float(fr["gt_psnr"])
+                    gt_ssim = float(fr["gt_ssim"])
+                    break
+        except (OSError, json.JSONDecodeError, KeyError, ValueError):
+            pass
+
+    if compressed_bytes is None or decomp_psnr is None:
+        return None
+
+    return {
+        "compressed_size_bytes": compressed_bytes,
+        "compressed_mb": compressed_bytes / (1024 * 1024),
+        "uncompressed_size_bytes": uncompressed_bytes,
+        "decomp_psnr": decomp_psnr,
+        "decomp_ssim": decomp_ssim,
+        "gt_psnr": gt_psnr,
+        "gt_ssim": gt_ssim,
+    }
+
+
+def _collect_videogs_rows(runner: Any, cfg: Any, sequence: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    frame_ids = runner._frame_ids(cfg)
+    frame_tag_re = re.compile(r"^frames_(\d+)_(\d+)_int_(\d+)$")
+
+    def parse_frame_tag(out_path: Path) -> tuple[int | None, int | None, int | None, int | None]:
+        m = frame_tag_re.match(out_path.name)
+        if m is None:
+            return None, None, None, None
+        start = int(m.group(1))
+        end = int(m.group(2))
+        interval = int(m.group(3))
+        if interval <= 0 or end < start:
+            return start, end, interval, None
+        group_size = ((end - start) // interval) + 1
+        return start, end, interval, group_size
+
+    def discover_output_folders_for_qp(qp: int, frame_id: int) -> list[tuple[str, int | None]]:
+        qp_root = runner._model_root(cfg, sequence) / "compression" / "videogs" / f"qp_{qp}"
+        candidates: list[tuple[str, int | None]] = []
+
+        if qp_root.is_dir():
+            for out_dir in sorted(glob.glob(str(qp_root / "frames_*_int_*"))):
+                out_path = Path(out_dir)
+                config_path = out_path / "videogs_config.json"
+                detected_frame_start_from_tag, _, _, detected_group_size = parse_frame_tag(out_path)
+                if (
+                    detected_frame_start_from_tag is not None
+                    and detected_frame_start_from_tag != frame_id
+                ):
+                    continue
+
+                detected_frame_start: int | None = None
+                if config_path.is_file():
+                    try:
+                        with open(config_path, encoding="utf-8") as f:
+                            config = json.load(f)
+                        raw_start = config.get("frame_start")
+                        if raw_start is not None:
+                            detected_frame_start = int(raw_start)
+                    except (OSError, json.JSONDecodeError, ValueError, TypeError):
+                        pass
+
+                if detected_frame_start is not None and detected_frame_start != frame_id:
+                    continue
+                candidates.append((str(out_path), detected_group_size))
+
+        default_out = runner._videogs_output_folder(cfg, sequence, frame_id, qp)
+        default_group_size = runner.SWEEP_SPACE.videogs_group_size
+        if not any(out == default_out for out, _ in candidates):
+            candidates.append((default_out, default_group_size))
+
+        unique: list[tuple[str, int | None]] = []
+        seen: set[str] = set()
+        for out, gsize in candidates:
+            if out in seen:
+                continue
+            seen.add(out)
+            unique.append((out, gsize))
+        return unique
+
+    for frame_id in frame_ids:
+        for qp in runner.SWEEP_SPACE.videogs_qps:
+            for out, group_size in discover_output_folders_for_qp(qp, frame_id):
+                row = _load_single_frame_result(
+                    out,
+                    "benchmark_videogs_pipeline.csv",
+                    frame_id,
+                    compressed_size_field="compressed_size_gop_avg_bytes",
+                )
+                if row is None:
+                    continue
+                param_suffix = f" g={group_size}" if group_size is not None else ""
+                row.update(
+                    dataset=cfg.name,
+                    sequence=sequence,
+                    frame_id=frame_id,
+                    baseline="VideoGS",
+                    params=f"qp={qp}{param_suffix}",
+                    group_size=group_size,
+                )
+                rows.append(row)
+    return rows
+
+
+def _collect_mesongs_rows(runner: Any, cfg: Any, sequence: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for frame_id in runner._frame_ids(cfg):
+        for depth in runner.SWEEP_SPACE.mesongs_depths_by_dataset[cfg.name]:
+            for num_bits in runner.SWEEP_SPACE.mesongs_num_bits:
+                for n_block in runner.SWEEP_SPACE.mesongs_n_blocks:
+                    for cb in runner.SWEEP_SPACE.mesongs_codebook_sizes:
+                        out = runner._mesongs_output_folder(
+                            cfg,
+                            sequence,
+                            frame_id,
+                            depth,
+                            num_bits,
+                            n_block,
+                            cb,
+                        )
+                        row = _load_single_frame_result(out, "benchmark_mesongs.csv", frame_id)
+                        if row is None:
+                            legacy_out = _mesongs_legacy_output_folder(
+                                runner,
+                                cfg,
+                                sequence,
+                                frame_id,
+                                depth,
+                                num_bits,
+                                n_block,
+                                cb,
+                            )
+                            row = _load_single_frame_result(legacy_out, "benchmark_mesongs.csv", frame_id)
+                        if row is None:
+                            continue
+                        row.update(
+                            dataset=cfg.name,
+                            sequence=sequence,
+                            frame_id=frame_id,
+                            baseline="MesonGS",
+                            params=f"d={depth} nb={num_bits} nblk={n_block} cb={cb}",
+                        )
+                        rows.append(row)
+    return rows
+
+
+def _collect_dracogs_rows(runner: Any, cfg: Any, sequence: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for frame_id in runner._frame_ids(cfg):
+        for eg in runner.SWEEP_SPACE.dracogs_eg:
+            for eo in runner.SWEEP_SPACE.dracogs_eo:
+                for et in runner.SWEEP_SPACE.dracogs_et:
+                    for es in runner.SWEEP_SPACE.dracogs_es:
+                        out = runner._dracogs_output_folder(cfg, sequence, frame_id, eg, eo, et, es)
+                        row = _load_single_frame_result(out, "benchmark_dracogs.csv", frame_id)
+                        if row is None:
+                            legacy_out = _dracogs_legacy_output_folder(
+                                runner,
+                                cfg,
+                                sequence,
+                                frame_id,
+                                eg,
+                                eo,
+                                et,
+                                es,
+                            )
+                            row = _load_single_frame_result(legacy_out, "benchmark_dracogs.csv", frame_id)
+                        if row is None:
+                            continue
+                        row.update(
+                            dataset=cfg.name,
+                            sequence=sequence,
+                            frame_id=frame_id,
+                            baseline="DracoGS",
+                            params=f"eg={eg} eo={eo} et={et} es={es}",
+                        )
+                        rows.append(row)
+    return rows
+
+
 def plot_group(
     dataset: str,
     sequence: str,
@@ -340,56 +632,16 @@ def _dracogs_sweep_override(runner_module: Any, sequence: str):
         runner_module.SWEEP_SPACE = original
 
 
-def _collect_baselines_to_csv(
-    csv_path: str,
-    selected_datasets: list[str] | None,
-    selected_sequences: list[str] | None,
-    selected_videogs_group_sizes: list[int] | None = None,
-) -> None:
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location(
-        "run_rd_baselines_experiments",
-        str(SCRIPTS_DIR / "run_rd_baselines_experiments.py"),
-    )
-    assert spec is not None and spec.loader is not None
-    runner = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = runner
-    spec.loader.exec_module(runner)
-
-    allowed_datasets = set(selected_datasets) if selected_datasets else None
-    allowed_sequences = set(selected_sequences) if selected_sequences else None
-    videogs_allowed = set(selected_videogs_group_sizes) if selected_videogs_group_sizes is not None else None
-
-    all_rows: list[dict[str, Any]] = []
-    for ds_name, cfg in runner.ALL_DATASETS.items():
-        if allowed_datasets is not None and ds_name not in allowed_datasets:
-            continue
-        sequences = list(runner.SEQUENCE_SETTINGS[cfg.name])
-        if allowed_sequences is not None:
-            sequences = [sequence for sequence in sequences if sequence in allowed_sequences]
-        for sequence in sequences:
-            with _dracogs_sweep_override(runner, sequence):
-                for bl_key, collector in runner.BASELINE_COLLECTORS.items():
-                    rows = collector(cfg, sequence)
-                    if videogs_allowed is not None:
-                        rows = [
-                            r
-                            for r in rows
-                            if str(r.get("baseline", "")) != "VideoGS"
-                            or r.get("group_size") in videogs_allowed
-                        ]
-                    all_rows.extend(rows)
-                    if rows:
-                        print(f"  Collected {cfg.name} | {sequence} | {bl_key}: {len(rows)} rows")
-
-    os.makedirs(os.path.dirname(os.path.abspath(csv_path)), exist_ok=True)
-    with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=runner.CSV_COLUMNS, extrasaction="ignore")
-        writer.writeheader()
-        for row in all_rows:
-            writer.writerow(row)
-    print(f"  Collected {len(all_rows)} total rows -> {csv_path}")
+def _group_plot_rows(rows: list[dict[str, Any]]) -> dict[tuple[str, str, int], list[dict[str, Any]]]:
+    groups: dict[tuple[str, str, int], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        key = (
+            str(row.get("dataset", "")),
+            str(row.get("sequence", "")),
+            int(row.get("frame_id", 0)),
+        )
+        groups[key].append(row)
+    return groups
 
 
 def main() -> None:
@@ -400,16 +652,12 @@ def main() -> None:
 
     if PLOT_FORCE_RECOLLECT:
         print("Re-collecting baseline results ...")
-        import importlib.util
-
-        spec = importlib.util.spec_from_file_location(
-            "run_rd_baselines_experiments",
-            str(SCRIPTS_DIR / "run_rd_baselines_experiments.py"),
-        )
-        assert spec is not None and spec.loader is not None
-        runner = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = runner
-        spec.loader.exec_module(runner)
+        runner = _load_runner_module()
+        collectors = {
+            "videogs": _collect_videogs_rows,
+            "mesongs": _collect_mesongs_rows,
+            "dracogs": _collect_dracogs_rows,
+        }
 
         allowed_datasets = set(PLOT_DATASETS) if PLOT_DATASETS else None
         allowed_sequences = set(PLOT_SEQUENCES) if PLOT_SEQUENCES else None
@@ -425,8 +673,8 @@ def main() -> None:
             for sequence in sequences:
                 seq_rows: list[dict[str, Any]] = []
                 with _dracogs_sweep_override(runner, sequence):
-                    for bl_key, collector in runner.BASELINE_COLLECTORS.items():
-                        rows = collector(cfg, sequence)
+                    for bl_key, collector in collectors.items():
+                        rows = collector(runner, cfg, sequence)
                         seq_rows.extend(rows)
                         if rows:
                             print(f"  Collected {cfg.name} | {sequence} | {bl_key}: {len(rows)} rows")
@@ -435,26 +683,20 @@ def main() -> None:
                 plot_rows = seq_rows
                 if videogs_allowed is not None:
                     plot_rows = [
-                        r for r in plot_rows
+                        r
+                        for r in plot_rows
                         if str(r.get("baseline", "")) != "VideoGS"
                         or r.get("group_size") in videogs_allowed
                     ]
                 all_rows.extend(plot_rows)
-                groups: dict[tuple[str, str, int], list[dict[str, Any]]] = defaultdict(list)
-                for row in plot_rows:
-                    key = (
-                        str(row.get("dataset", "")),
-                        str(row.get("sequence", "")),
-                        int(row.get("frame_id", 0)),
-                    )
-                    groups[key].append(row)
+                groups = _group_plot_rows(plot_rows)
                 for (dataset, seq, frame_id), group_rows in sorted(groups.items()):
                     plot_group(dataset, seq, frame_id, group_rows, PLOT_OUTPUT_DIR)
 
         # write accumulated CSV
         os.makedirs(os.path.dirname(os.path.abspath(csv_path)), exist_ok=True)
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=runner.CSV_COLUMNS, extrasaction="ignore")
+            writer = csv.DictWriter(f, fieldnames=COLLECTED_CSV_COLUMNS, extrasaction="ignore")
             writer.writeheader()
             for row in all_rows:
                 writer.writerow(row)
@@ -476,14 +718,7 @@ def main() -> None:
                 for r in rows
                 if str(r.get("baseline", "")) != "VideoGS" or r.get("group_size") in allowed
             ]
-        groups: dict[tuple[str, str, int], list[dict[str, Any]]] = defaultdict(list)
-        for row in rows:
-            key = (
-                str(row.get("dataset", "")),
-                str(row.get("sequence", "")),
-                int(row.get("frame_id", 0)),
-            )
-            groups[key].append(row)
+        groups = _group_plot_rows(rows)
         for (dataset, sequence, frame_id), group_rows in sorted(groups.items()):
             plot_group(dataset, sequence, frame_id, group_rows, PLOT_OUTPUT_DIR)
 

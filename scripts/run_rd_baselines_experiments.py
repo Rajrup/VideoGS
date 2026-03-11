@@ -10,33 +10,31 @@ Result collection and plotting are intentionally handled by:
 
 from __future__ import annotations
 
-import csv
 import itertools
 import json
 import os
-import glob
-import re
 import shlex
 import shutil
 import subprocess
 import time
+from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar
+from typing import Callable, TypeVar
 
 RUN_DRY_RUN = False
 RUN_SKIP_COMPLETED_RUNS = True
-RUN_OVERWRITE_CSV_RES = True
+RUN_OVERWRITE_CSV_RES = False
 RUN_CUDA_DEVICES: tuple[str, ...] = ("0", "1")
 
 HIFI4G_DATA_ROOT = "/synology/rajrup/VideoGS"
 N3DV_DATA_ROOT = "/synology/rajrup/Queen"
 RUN_BASELINES: tuple[str, ...] = (
-    "videogs",
-    "dracogs",
-    "mesongs"
+    # "videogs",
+    # "dracogs",
+    "mesongs",
 )
 
 VIDEOGS_QP_VALUES: tuple[int, ...] = tuple(range(0, 41))
@@ -58,28 +56,28 @@ DRACOGS_CL = 10
 
 
 SEQUENCE_SETTINGS: dict[str, tuple[str, ...]] = {
-    "HiFi4G": (
-        "4K_Actor1_Greeting",
-        "4K_Actor2_Dancing",
-        "4K_Actor3_Violin",
-        "4K_Actor4_Dancing",
-        "4K_Actor5_Oil-paper_Umbrella",
-        "4K_Actor6_Changing_Clothes",
-        "4K_Actor7_Nunchaku",
-    ),
+    # "HiFi4G": (
+    #     "4K_Actor1_Greeting",
+    #     "4K_Actor2_Dancing",
+    #     "4K_Actor3_Violin",
+    #     "4K_Actor4_Dancing",
+    #     "4K_Actor5_Oil-paper_Umbrella",
+    #     "4K_Actor6_Changing_Clothes",
+    #     "4K_Actor7_Nunchaku",
+    # ),
     "N3DV": (
-        "cook_spinach",
+        # "cook_spinach",
         "coffee_martini",
-        "cut_roasted_beef",
-        "flame_salmon_1",
-        "flame_steak",
-        "sear_steak",
+        # "cut_roasted_beef",
+        # "flame_salmon_1",
+        # "flame_steak",
+        # "sear_steak",
     ),
 }
 
 FRAME_ID_LISTS: dict[str, tuple[int, ...]] = {
     "HiFi4G": (0,),
-    "N3DV": (1,),
+    "N3DV": tuple(range(1, 201, 10))
 }
 
 
@@ -126,7 +124,6 @@ SCRIPTS_DIR = SCRIPT_PATH.parent
 WORKSPACE_ROOT = SCRIPTS_DIR.parent.parent
 
 RD_BASELINES_RESULTS_ROOT = SCRIPTS_DIR / "rd_baselines_results"
-RD_BASELINES_COLLECTED_DIR = RD_BASELINES_RESULTS_ROOT / "collected"
 RD_BASELINES_RUN_SUMMARY_JSON = RD_BASELINES_RESULTS_ROOT / "run_summary.json"
 
 
@@ -235,24 +232,17 @@ def _frame_span(cfg: DatasetConfig, frame_id: int) -> tuple[int, int, int]:
     return fid, fid, 1
 
 
-def _videogs_frame_span(cfg: DatasetConfig, frame_id: int) -> tuple[int, int, int]:
+def _videogs_frame_span(frame_id: int) -> tuple[int, int, int]:
     fid = frame_id
     return fid, fid + SWEEP_SPACE.videogs_group_size, 1
-
-
-def _frame_span_tag(cfg: DatasetConfig, frame_id: int) -> str:
-    fs, fe, iv = _frame_span(cfg, frame_id)
-    if cfg.frame_end_exclusive:
-        return f"frames_{fs}_{fe - 1}_int_{iv}"
-    return f"frames_{fs}_{fe}_int_{iv}"
 
 
 def _frame_output_tag(frame_id: int) -> str:
     return f"frame{int(frame_id)}"
 
 
-def _videogs_frame_span_tag(cfg: DatasetConfig, frame_id: int) -> str:
-    fs, fe, iv = _videogs_frame_span(cfg, frame_id)
+def _videogs_frame_span_tag(frame_id: int) -> str:
+    fs, fe, iv = _videogs_frame_span(frame_id)
     return f"frames_{fs}_{fe - 1}_int_{iv}"
 
 
@@ -262,7 +252,7 @@ def _videogs_output_folder(cfg: DatasetConfig, sequence: str, frame_id: int, qp:
         / "compression"
         / "videogs"
         / f"qp_{qp}"
-        / _videogs_frame_span_tag(cfg, frame_id)
+        / _videogs_frame_span_tag(frame_id)
     )
 
 
@@ -279,19 +269,6 @@ def _mesongs_output_folder(
     return str(_model_root(cfg, sequence) / "compression" / "mesongs" / params_tag / _frame_output_tag(frame_id))
 
 
-def _mesongs_legacy_output_folder(
-    cfg: DatasetConfig,
-    sequence: str,
-    frame_id: int,
-    depth: int,
-    num_bits: int,
-    n_block: int,
-    cb: int,
-) -> str:
-    params_tag = f"d{depth}_nb{num_bits}_nblk{n_block}_cb{cb}"
-    return str(_model_root(cfg, sequence) / "compression" / "mesongs" / params_tag / _frame_span_tag(cfg, frame_id))
-
-
 def _dracogs_output_folder(
     cfg: DatasetConfig,
     sequence: str,
@@ -305,26 +282,13 @@ def _dracogs_output_folder(
     return str(_model_root(cfg, sequence) / "compression" / "dracogs" / params_tag / _frame_output_tag(frame_id))
 
 
-def _dracogs_legacy_output_folder(
-    cfg: DatasetConfig,
-    sequence: str,
-    frame_id: int,
-    eg: int,
-    eo: int,
-    et: int,
-    es: int,
-) -> str:
-    params_tag = f"eg_{eg}_eo_{eo}_et_{et}_es_{es}_cl_{SWEEP_SPACE.dracogs_cl}"
-    return str(_model_root(cfg, sequence) / "compression" / "dracogs" / params_tag / _frame_span_tag(cfg, frame_id))
-
-
 def run_cmd(cmd: list[str], cwd: Path, dry_run: bool, cuda_device: str) -> None:
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(cuda_device)
     if dry_run:
         print(f"[DRY RUN] cwd={cwd} | CUDA_VISIBLE_DEVICES={cuda_device} | {shlex.join(cmd)}")
         return
-    subprocess.run(cmd, cwd=str(cwd), check=True, env=env)
+    _ = subprocess.run(cmd, cwd=str(cwd), check=True, env=env)
 
 
 def conda_python_cmd(env_name: str, script_path: Path, args: list[str]) -> list[str]:
@@ -369,12 +333,12 @@ def _run_tasks_across_devices(
             device_failures.extend(task_runner(queued_task, device))
         return device_failures
 
-    failures: list[tuple[str, str, str]] = []
+    all_failures: list[tuple[str, str, str]] = []
     with ThreadPoolExecutor(max_workers=len(devices)) as executor:
         futures = [executor.submit(run_device_queue, device, queue) for device, queue in per_device_tasks.items()]
         for future in futures:
-            failures.extend(future.result())
-    return failures
+            all_failures.extend(future.result())
+    return all_failures
 
 
 def run_evaluation(
@@ -454,7 +418,7 @@ def run_videogs_rd(
     def run_single(task: tuple[int, int], cuda_device: str) -> list[tuple[str, str, str]]:
         failures: list[tuple[str, str, str]] = []
         frame_id, qp = task
-        fs, fe, iv = _videogs_frame_span(cfg, frame_id)
+        fs, fe, iv = _videogs_frame_span(frame_id)
         output_folder = _videogs_output_folder(cfg, sequence, frame_id, qp)
         if skip_completed_runs and _output_complete(output_folder):
             log_step(f"SKIP VideoGS | {cfg.name} | {sequence} | f={frame_id} | qp={qp}")
@@ -489,10 +453,7 @@ def run_videogs_rd(
             run_cmd(cmd, cwd=project_root, dry_run=dry_run, cuda_device=cuda_device)
             run_evaluation(cfg, sequence, frame_id, output_folder, dry_run, cuda_device)
         except subprocess.CalledProcessError as exc:
-            print(
-                f"WARNING: VideoGS frame={frame_id} qp={qp} "
-                f"failed for {cfg.name}/{sequence} (exit {exc.returncode})"
-            )
+            print(f"WARNING: VideoGS frame={frame_id} qp={qp} failed for {cfg.name}/{sequence} (exit {exc.returncode})")
             _cleanup_partial(output_folder)
             failures.append((cfg.name, "videogs", sequence))
         return failures
@@ -663,264 +624,7 @@ BASELINE_RUNNERS: dict[
 }
 
 
-BENCHMARK_CSV_NAMES: dict[str, str] = {
-    "videogs": "benchmark_videogs_pipeline.csv",
-    "mesongs": "benchmark_mesongs.csv",
-    "dracogs": "benchmark_dracogs.csv",
-}
-
-
-def _load_single_frame_result(
-    output_folder: str,
-    benchmark_csv_name: str,
-    frame_id: int,
-    compressed_size_field: str = "compressed_size_bytes",
-) -> Optional[dict[str, Any]]:
-    benchmark_path = os.path.join(output_folder, benchmark_csv_name)
-    eval_json_path = os.path.join(output_folder, "evaluation", "evaluation_results.json")
-
-    compressed_bytes: Optional[int] = None
-    uncompressed_bytes = 0
-    if os.path.isfile(benchmark_path):
-        try:
-            with open(benchmark_path, newline="", encoding="utf-8") as f:
-                for row in csv.DictReader(f):
-                    if int(row["frame_id"]) == frame_id:
-                        comp_raw = row.get(compressed_size_field) or row.get("compressed_size_bytes")
-                        if comp_raw is None:
-                            break
-                        compressed_bytes = int(comp_raw)
-                        uncompressed_bytes = int(row.get("uncompressed_size_bytes", 0))
-                        break
-        except (OSError, KeyError, ValueError):
-            pass
-
-    decomp_psnr: Optional[float] = None
-    decomp_ssim: Optional[float] = None
-    gt_psnr: Optional[float] = None
-    gt_ssim: Optional[float] = None
-    if os.path.isfile(eval_json_path):
-        try:
-            with open(eval_json_path, encoding="utf-8") as f:
-                eval_data = json.load(f)
-            for fr in eval_data.get("per_frame", []):
-                if int(fr["frame"]) == frame_id:
-                    decomp_psnr = float(fr["decomp_psnr"])
-                    decomp_ssim = float(fr["decomp_ssim"])
-                    gt_psnr = float(fr["gt_psnr"])
-                    gt_ssim = float(fr["gt_ssim"])
-                    break
-        except (OSError, json.JSONDecodeError, KeyError, ValueError):
-            pass
-
-    if compressed_bytes is None or decomp_psnr is None:
-        return None
-
-    return {
-        "compressed_size_bytes": compressed_bytes,
-        "compressed_mb": compressed_bytes / (1024 * 1024),
-        "uncompressed_size_bytes": uncompressed_bytes,
-        "decomp_psnr": decomp_psnr,
-        "decomp_ssim": decomp_ssim,
-        "gt_psnr": gt_psnr,
-        "gt_ssim": gt_ssim,
-    }
-
-
-def collect_videogs(cfg: DatasetConfig, sequence: str) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    frame_ids = _frame_ids(cfg)
-
-    frame_tag_re = re.compile(r"^frames_(\d+)_(\d+)_int_(\d+)$")
-
-    def parse_frame_tag(out_path: Path) -> tuple[Optional[int], Optional[int], Optional[int], Optional[int]]:
-        m = frame_tag_re.match(out_path.name)
-        if m is None:
-            return None, None, None, None
-        start = int(m.group(1))
-        end = int(m.group(2))
-        interval = int(m.group(3))
-        if interval <= 0 or end < start:
-            return start, end, interval, None
-        group_size = ((end - start) // interval) + 1
-        return start, end, interval, group_size
-
-    def discover_output_folders_for_qp(qp: int, frame_id: int) -> list[tuple[str, Optional[int]]]:
-        qp_root = _model_root(cfg, sequence) / "compression" / "videogs" / f"qp_{qp}"
-        candidates: list[tuple[str, Optional[int]]] = []
-
-        if qp_root.is_dir():
-            for out_dir in sorted(glob.glob(str(qp_root / "frames_*_int_*"))):
-                out_path = Path(out_dir)
-                config_path = out_path / "videogs_config.json"
-                detected_frame_start_from_tag, _, _, detected_group_size = parse_frame_tag(out_path)
-                if (
-                    detected_frame_start_from_tag is not None
-                    and detected_frame_start_from_tag != frame_id
-                ):
-                    continue
-                detected_frame_start: Optional[int] = None
-                if config_path.is_file():
-                    try:
-                        with open(config_path, encoding="utf-8") as f:
-                            config = json.load(f)
-                        raw_start = config.get("frame_start")
-                        if raw_start is not None:
-                            detected_frame_start = int(raw_start)
-                    except (OSError, json.JSONDecodeError, ValueError, TypeError):
-                        pass
-
-                if detected_frame_start is not None and detected_frame_start != frame_id:
-                    continue
-                candidates.append((str(out_path), detected_group_size))
-
-        default_out = _videogs_output_folder(cfg, sequence, frame_id, qp)
-        default_group_size = SWEEP_SPACE.videogs_group_size
-        if not any(out == default_out for out, _ in candidates):
-            candidates.append((default_out, default_group_size))
-
-        unique: list[tuple[str, Optional[int]]] = []
-        seen: set[str] = set()
-        for out, gsize in candidates:
-            if out in seen:
-                continue
-            seen.add(out)
-            unique.append((out, gsize))
-        return unique
-
-    for frame_id in frame_ids:
-        for qp in SWEEP_SPACE.videogs_qps:
-            for out, group_size in discover_output_folders_for_qp(qp, frame_id):
-                row = _load_single_frame_result(
-                    out,
-                    BENCHMARK_CSV_NAMES["videogs"],
-                    frame_id,
-                    compressed_size_field="compressed_size_gop_avg_bytes",
-                )
-                if row is None:
-                    continue
-                param_suffix = f" g={group_size}" if group_size is not None else ""
-                row.update(
-                    dataset=cfg.name,
-                    sequence=sequence,
-                    frame_id=frame_id,
-                    baseline="VideoGS",
-                    params=f"qp={qp}{param_suffix}",
-                    group_size=group_size,
-                )
-                rows.append(row)
-    return rows
-
-
-def collect_mesongs(cfg: DatasetConfig, sequence: str) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for frame_id in _frame_ids(cfg):
-        for depth, num_bits, n_block, cb in itertools.product(
-            SWEEP_SPACE.mesongs_depths_by_dataset[cfg.name],
-            SWEEP_SPACE.mesongs_num_bits,
-            SWEEP_SPACE.mesongs_n_blocks,
-            SWEEP_SPACE.mesongs_codebook_sizes,
-        ):
-            out = _mesongs_output_folder(cfg, sequence, frame_id, depth, num_bits, n_block, cb)
-            row = _load_single_frame_result(out, BENCHMARK_CSV_NAMES["mesongs"], frame_id)
-            if row is None:
-                legacy_out = _mesongs_legacy_output_folder(
-                    cfg,
-                    sequence,
-                    frame_id,
-                    depth,
-                    num_bits,
-                    n_block,
-                    cb,
-                )
-                row = _load_single_frame_result(legacy_out, BENCHMARK_CSV_NAMES["mesongs"], frame_id)
-            if row is None:
-                continue
-            row.update(
-                dataset=cfg.name,
-                sequence=sequence,
-                frame_id=frame_id,
-                baseline="MesonGS",
-                params=f"d={depth} nb={num_bits} nblk={n_block} cb={cb}",
-            )
-            rows.append(row)
-    return rows
-
-
-def collect_dracogs(cfg: DatasetConfig, sequence: str) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for frame_id in _frame_ids(cfg):
-        for eg, eo, et, es in itertools.product(
-            SWEEP_SPACE.dracogs_eg,
-            SWEEP_SPACE.dracogs_eo,
-            SWEEP_SPACE.dracogs_et,
-            SWEEP_SPACE.dracogs_es,
-        ):
-            out = _dracogs_output_folder(cfg, sequence, frame_id, eg, eo, et, es)
-            row = _load_single_frame_result(out, BENCHMARK_CSV_NAMES["dracogs"], frame_id)
-            if row is None:
-                legacy_out = _dracogs_legacy_output_folder(
-                    cfg,
-                    sequence,
-                    frame_id,
-                    eg,
-                    eo,
-                    et,
-                    es,
-                )
-                row = _load_single_frame_result(legacy_out, BENCHMARK_CSV_NAMES["dracogs"], frame_id)
-            if row is None:
-                continue
-            row.update(
-                dataset=cfg.name,
-                sequence=sequence,
-                frame_id=frame_id,
-                baseline="DracoGS",
-                params=f"eg={eg} eo={eo} et={et} es={es}",
-            )
-            rows.append(row)
-    return rows
-
-
-BASELINE_COLLECTORS: dict[str, Callable[[DatasetConfig, str], list[dict[str, Any]]]] = {
-    "videogs": collect_videogs,
-    "mesongs": collect_mesongs,
-    "dracogs": collect_dracogs,
-}
-
-
-CSV_COLUMNS = [
-    "dataset",
-    "sequence",
-    "frame_id",
-    "baseline",
-    "params",
-    "group_size",
-    "compressed_size_bytes",
-    "compressed_mb",
-    "uncompressed_size_bytes",
-    "decomp_psnr",
-    "decomp_ssim",
-    "gt_psnr",
-    "gt_ssim",
-]
-
-
-def write_results_csv(rows: list[dict[str, Any]], path: str, overwrite_csv_res: bool) -> None:
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    if not overwrite_csv_res and os.path.isfile(path):
-        print(f"  SKIP saved CSV (exists): {path}")
-        return
-
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS, extrasaction="ignore")
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
-    print(f"  Wrote {len(rows)} rows to: {path}")
-
-
-def write_run_summary(summary: dict[str, Any], overwrite_csv_res: bool) -> None:
+def write_run_summary(summary: Mapping[str, object], overwrite_csv_res: bool) -> None:
     os.makedirs(str(RD_BASELINES_RESULTS_ROOT), exist_ok=True)
     if not overwrite_csv_res and RD_BASELINES_RUN_SUMMARY_JSON.is_file():
         print(f"  SKIP saved summary (exists): {RD_BASELINES_RUN_SUMMARY_JSON}")
@@ -932,6 +636,20 @@ def write_run_summary(summary: dict[str, Any], overwrite_csv_res: bool) -> None:
 
 def _selected_sequences(cfg: DatasetConfig) -> list[str]:
     return list(SEQUENCE_SETTINGS[cfg.name])
+
+
+def _normalize_selected_items(selected: object, item_name: str) -> list[str]:
+    if isinstance(selected, str):
+        items = [part.strip() for part in selected.split(",")]
+    elif isinstance(selected, Iterable):
+        items = [str(item).strip() for item in selected]
+    else:
+        raise TypeError(f"{item_name} selection must be a string or an iterable of strings")
+
+    normalized = [item for item in items if item]
+    if not normalized:
+        raise ValueError(f"No {item_name}(s) selected")
+    return normalized
 
 
 def _validate_selected_items(selected: list[str], allowed: set[str], item_name: str) -> None:
@@ -970,7 +688,7 @@ def main() -> None:
     run_start = time.time()
 
     datasets = list(SEQUENCE_SETTINGS.keys())
-    baselines = list(RUN_CONFIG.baselines)
+    baselines = _normalize_selected_items(RUN_CONFIG.baselines, "baseline")
     dry_run = bool(RUN_CONFIG.dry_run)
     overwrite_csv_res = bool(RUN_CONFIG.overwrite_csv_res)
     effective_skip_completed = bool(RUN_CONFIG.skip_completed_runs or not overwrite_csv_res)
