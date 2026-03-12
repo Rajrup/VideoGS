@@ -552,7 +552,7 @@ def encode_gpcc(ply_path, output_dir, qp_config, tmc3_path, voxel_depth):
         metadata["files"]["scale"].append(f"{name}.bin")
         compression_jobs.append(("scale", scale_ply, scale_bin, 4))
 
-    for i in range(1, 4):
+    for i in range(4):
         rot_u16, mn, mx = adaptive_normalize(quats[:, i], np.uint16)
         metadata["Attribute"][f"rot_{i}"] = {"min": mn, "max": mx}
         name = f"rot_{i}"
@@ -725,10 +725,6 @@ def decode_gpcc(compressed_dir, output_ply_path, metadata_json_path, tmc3_path):
 
     if not decomp_ply_paths["rot"]:
         raise ValueError("No rotation streams were decoded")
-
-    if np.allclose(quats[:, 0], 0.0):
-        xyz_sq = np.sum(np.square(quats[:, 1:4]), axis=1)
-        quats[:, 0] = np.sqrt(np.clip(1.0 - xyz_sq, 0.0, 1.0)).astype(np.float32)
 
     quat_norm = np.linalg.norm(quats, axis=1, keepdims=True)
     quats = quats / np.maximum(quat_norm, 1e-12)

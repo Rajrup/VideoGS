@@ -27,7 +27,7 @@ from typing import Callable, TypeVar
 RUN_DRY_RUN = False
 RUN_SKIP_COMPLETED_RUNS = False
 RUN_OVERWRITE_CSV_RES = True
-RUN_SAVE_EVAL_IMAGES = True
+RUN_SAVE_EVAL_IMAGES = False
 RUN_CUDA_DEVICES: tuple[str, ...] = ("0", "1")
 
 HIFI4G_DATA_ROOT = "/synology/rajrup/VideoGS"
@@ -58,49 +58,49 @@ DRACOGS_CL = 10
 
 GPCC_TMC3_PATH = "/ssd1/haodongw/workspace/3dstream/mpeg-pcc-tmc13/build/tmc3/tmc3"
 GPCC_OCTREE_DEPTHS_BY_DATASET: dict[str, tuple[int, ...]] = {
-    "HiFi4G": (12,),
-    "N3DV": (17,),
+    "HiFi4G": (8, 9, 10, 11, 12,),
+    "N3DV": (12, 13, 14, 15, 16, 17,),
 }
 GPCC_QP_COMBOS: tuple[tuple[int, int, int], ...] = (  # (qp_rest, qp_dc, qp_opacity)
-    # (40, 4, 16), (40, 4, 34), (40, 4, 40),
-    # (40, 16, 16), (40, 16, 34), (40, 16, 40),
-    # (40, 20, 16), (40, 20, 34), (40, 20, 40),
-    # (40, 24, 16), (40, 24, 34), (40, 24, 40),
-    # (40, 28, 16), (40, 28, 34), (40, 28, 40),
-    # (38, 4, 4), (38, 16, 4),
-    # (34, 4, 4), (34, 16, 4),
-    # (31, 4, 4), (31, 16, 4),
-    # (28, 4, 4), (28, 16, 4),
-    # (38, 4, 16), (38, 16, 16),
-    # (34, 4, 16), (34, 16, 16),
-    # (31, 4, 16), (31, 16, 16),
-    # (28, 4, 16), (28, 16, 16),
-    # (38, 4, 28), (38, 16, 28),
-    # (34, 4, 28), (34, 16, 28),
-    # (31, 4, 28), (31, 16, 28),
-    # (28, 4, 28), (28, 16, 28),
-    # (16, 4, 4), (16, 16, 4),
-    (4, 4, 4), # (4, 16, 4),
-    # (16, 4, 16), (4, 4, 16),
+    (40, 4, 16), (40, 4, 34), (40, 4, 40),
+    (40, 16, 16), (40, 16, 34), (40, 16, 40),
+    (40, 20, 16), (40, 20, 34), (40, 20, 40),
+    (40, 24, 16), (40, 24, 34), (40, 24, 40),
+    (40, 28, 16), (40, 28, 34), (40, 28, 40),
+    (38, 4, 4), (38, 16, 4),
+    (34, 4, 4), (34, 16, 4),
+    (31, 4, 4), (31, 16, 4),
+    (28, 4, 4), (28, 16, 4),
+    (38, 4, 16), (38, 16, 16),
+    (34, 4, 16), (34, 16, 16),
+    (31, 4, 16), (31, 16, 16),
+    (28, 4, 16), (28, 16, 16),
+    (38, 4, 28), (38, 16, 28),
+    (34, 4, 28), (34, 16, 28),
+    (31, 4, 28), (31, 16, 28),
+    (28, 4, 28), (28, 16, 28),
+    (16, 4, 4), (16, 16, 4),
+    (4, 4, 4), (4, 16, 4),
+    (16, 4, 16), (4, 4, 16),
 )
 
 
 SEQUENCE_SETTINGS: dict[str, tuple[str, ...]] = {
     "HiFi4G": (
-        # "4K_Actor1_Greeting",
-        # "4K_Actor2_Dancing",
-        # "4K_Actor3_Violin",
-        # "4K_Actor4_Dancing",
-        # "4K_Actor5_Oil-paper_Umbrella",
-        # "4K_Actor6_Changing_Clothes",
-        # "4K_Actor7_Nunchaku",
+        "4K_Actor1_Greeting",
+        "4K_Actor2_Dancing",
+        "4K_Actor3_Violin",
+        "4K_Actor4_Dancing",
+        "4K_Actor5_Oil-paper_Umbrella",
+        "4K_Actor6_Changing_Clothes",
+        "4K_Actor7_Nunchaku",
     ),
     "N3DV": (
-        # "cook_spinach",
-        # "coffee_martini",
-        # "cut_roasted_beef",
-        # "flame_salmon_1",
-        # "flame_steak",
+        "cook_spinach",
+        "coffee_martini",
+        "cut_roasted_beef",
+        "flame_salmon_1",
+        "flame_steak",
         "sear_steak",
     ),
 }
