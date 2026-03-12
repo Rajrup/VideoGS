@@ -35,9 +35,7 @@ DEFAULT_PLOTS_DIR = RD_BASELINES_RESULTS_ROOT / "plots"
 PLOT_CSV_PATH = str(DEFAULT_CSV)
 PLOT_OUTPUT_DIR = str(DEFAULT_PLOTS_DIR)
 PLOT_DATASETS: list[str] | None = None
-PLOT_SEQUENCES: list[str] | None = [
-    "4K_Actor1_Greeting",
-]
+PLOT_SEQUENCES: list[str] | None = []
 PLOT_VIDEOGS_GROUP_SIZES: list[int] | None = [20]
 PLOT_FORCE_RECOLLECT = True
 

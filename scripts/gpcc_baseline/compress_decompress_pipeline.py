@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Any, Dict, List, cast
 
 np = importlib.import_module("numpy")
@@ -329,8 +330,12 @@ def _build_encode_command(tmc3_path, input_ply, output_bin, attr_type, qp, voxel
             "--planarEnabled": "1",
             "--planarModeIdcmUse": "0",
             "--convertPlyColourspace": "0",
-            "--transformType": "0",
-            "--qp": "4",
+            "--transformType": "1",
+            "--numberOfNearestNeighborsInPrediction": "3",
+            "--intraLodPredictionSkipLayers": "0",
+            "--interComponentPredictionEnabled": "0",
+            "--adaptivePredictionThreshold": "64",
+            "--qp": _DYNAMIC,
             "--bitdepth": "16",
             "--attrOffset": "0",
             "--attrScale": "1",
@@ -349,8 +354,12 @@ def _build_encode_command(tmc3_path, input_ply, output_bin, attr_type, qp, voxel
             "--planarEnabled": "1",
             "--planarModeIdcmUse": "0",
             "--convertPlyColourspace": "0",
-            "--transformType": "0",
-            "--qp": "4",
+            "--transformType": "1",
+            "--numberOfNearestNeighborsInPrediction": "3",
+            "--intraLodPredictionSkipLayers": "0",
+            "--interComponentPredictionEnabled": "0",
+            "--adaptivePredictionThreshold": "64",
+            "--qp": _DYNAMIC,
             "--bitdepth": "16",
             "--attrOffset": "0",
             "--attrScale": "1",
@@ -475,8 +484,11 @@ def encode_gpcc(ply_path, output_dir, qp_config, tmc3_path, voxel_depth):
 
     xyz = cast(Any, merged["voxel_xyz"])
     colors = cast(Any, merged["colors"])
-    if colors.shape[1] < 48:
-        raise ValueError(f"Expected at least 48 color channels after merge, got {colors.shape[1]}")
+    if colors.shape[1] < 3:
+        raise ValueError(f"Expected at least 3 color channels after merge, got {colors.shape[1]}")
+    n_rest_channels = int(colors.shape[1] - 3)
+    if n_rest_channels % 3 != 0:
+        raise ValueError(f"Expected rest channel count divisible by 3, got {n_rest_channels}")
     opacity = cast(Any, merged["opacity"])
     scales = cast(Any, merged["scales"])
     quats = cast(Any, merged["quats"])
@@ -514,8 +526,8 @@ def encode_gpcc(ply_path, output_dir, qp_config, tmc3_path, voxel_depth):
     metadata["files"]["dc"].append("dc.bin")
     compression_jobs.append(("dc", dc_ply, dc_bin, qp_config["qp_dc"]))
 
-    rest_rgb = colors[:, 3:48]
-    for i in range(0, 45, 3):
+    rest_rgb = colors[:, 3 : 3 + n_rest_channels]
+    for i in range(0, n_rest_channels, 3):
         rest_triplet_rgb = rest_rgb[:, i : i + 3]
         rest_triplet_yuv = convert_rgb2yuv(rest_triplet_rgb)
         c_u8 = []
@@ -540,7 +552,7 @@ def encode_gpcc(ply_path, output_dir, qp_config, tmc3_path, voxel_depth):
         metadata["files"]["scale"].append(f"{name}.bin")
         compression_jobs.append(("scale", scale_ply, scale_bin, 4))
 
-    for i in range(4):
+    for i in range(1, 4):
         rot_u16, mn, mx = adaptive_normalize(quats[:, i], np.uint16)
         metadata["Attribute"][f"rot_{i}"] = {"min": mn, "max": mx}
         name = f"rot_{i}"
@@ -629,20 +641,31 @@ def decode_gpcc(compressed_dir, output_ply_path, metadata_json_path, tmc3_path):
     # redundant morton-code calculations + argsorts.
     first_ply = decomp_ply_paths["opacity"][0]
     ref_points, _, _ = _read_attribute_ply(first_ply)
-    points_ref, sort_idx = morton_order_sort(ref_points)
+    points_ref, _ = morton_order_sort(ref_points)
     n_points = points_ref.shape[0]
 
+    geom_meta = metadata.get("Geometry", {})
+    vmin = np.asarray(geom_meta.get("vmin", [0.0, 0.0, 0.0]), dtype=np.float32)
+    voxel_size = float(geom_meta.get("voxel_size", 1.0))
+    points_world = (points_ref.astype(np.float32) + 0.5) * voxel_size + vmin.reshape(1, 3)
+
     def _read_sorted_reflectance(ply_path):
-        _, _, refl = _read_attribute_ply(ply_path)
+        points, _, refl = _read_attribute_ply(ply_path)
         if refl is None:
             raise ValueError(f"Decompressed PLY missing reflectance: {ply_path}")
-        return refl[sort_idx].astype(np.float32)
+        points_sorted, local_sort_idx = morton_order_sort(points)
+        if points_sorted.shape != points_ref.shape or not np.array_equal(points_sorted, points_ref):
+            raise ValueError(f"Geometry/order mismatch after sorting for reflectance stream: {ply_path}")
+        return refl[local_sort_idx].astype(np.float32)
 
     def _read_sorted_colors(ply_path):
-        _, colors, _ = _read_attribute_ply(ply_path)
+        points, colors, _ = _read_attribute_ply(ply_path)
         if colors is None:
             raise ValueError(f"Decompressed PLY missing color attributes: {ply_path}")
-        return colors[sort_idx].astype(np.float32)
+        points_sorted, local_sort_idx = morton_order_sort(points)
+        if points_sorted.shape != points_ref.shape or not np.array_equal(points_sorted, points_ref):
+            raise ValueError(f"Geometry/order mismatch after sorting for color stream: {ply_path}")
+        return colors[local_sort_idx].astype(np.float32)
 
     opacity_denorm = uint16_to_float(
         _read_sorted_reflectance(decomp_ply_paths["opacity"][0]),
@@ -656,13 +679,26 @@ def decode_gpcc(compressed_dir, output_ply_path, metadata_json_path, tmc3_path):
     y2 = uchar_to_float(dc_sorted[:, 2], metadata["Attribute"]["f_dc_2"]["min"], metadata["Attribute"]["f_dc_2"]["max"])
     dc_rgb = convert_yuv2rgb(np.stack([y0, y1, y2], axis=1)).astype(np.float32)
 
+    rest_attr_indices = sorted(
+        int(k.split("_")[-1])
+        for k in metadata["Attribute"].keys()
+        if k.startswith("f_rest_")
+    )
+    if len(rest_attr_indices) % 3 != 0:
+        raise ValueError(f"Invalid number of rest attributes in metadata: {len(rest_attr_indices)}")
+
     rest_rgb_channels = []
     for rest_idx, rest_ply in enumerate(decomp_ply_paths["rest"]):
         rest_sorted = _read_sorted_colors(rest_ply)
-        base = rest_idx * 3
-        r0 = uchar_to_float(rest_sorted[:, 0], metadata["Attribute"][f"f_rest_{base}"]["min"], metadata["Attribute"][f"f_rest_{base}"]["max"])
-        r1 = uchar_to_float(rest_sorted[:, 1], metadata["Attribute"][f"f_rest_{base + 1}"]["min"], metadata["Attribute"][f"f_rest_{base + 1}"]["max"])
-        r2 = uchar_to_float(rest_sorted[:, 2], metadata["Attribute"][f"f_rest_{base + 2}"]["min"], metadata["Attribute"][f"f_rest_{base + 2}"]["max"])
+        idx_base = rest_idx * 3
+        if idx_base + 2 >= len(rest_attr_indices):
+            raise ValueError("Rest stream count does not match metadata attributes")
+        k0 = f"f_rest_{rest_attr_indices[idx_base]}"
+        k1 = f"f_rest_{rest_attr_indices[idx_base + 1]}"
+        k2 = f"f_rest_{rest_attr_indices[idx_base + 2]}"
+        r0 = uchar_to_float(rest_sorted[:, 0], metadata["Attribute"][k0]["min"], metadata["Attribute"][k0]["max"])
+        r1 = uchar_to_float(rest_sorted[:, 1], metadata["Attribute"][k1]["min"], metadata["Attribute"][k1]["max"])
+        r2 = uchar_to_float(rest_sorted[:, 2], metadata["Attribute"][k2]["min"], metadata["Attribute"][k2]["max"])
         rest_rgb_triplet = convert_yuv2rgb(np.stack([r0, r1, r2], axis=1)).astype(np.float32)
         rest_rgb_channels.extend([rest_rgb_triplet[:, 0], rest_rgb_triplet[:, 1], rest_rgb_triplet[:, 2]])
 
@@ -675,18 +711,36 @@ def decode_gpcc(compressed_dir, output_ply_path, metadata_json_path, tmc3_path):
         )
 
     quats = np.zeros((n_points, 4), dtype=np.float32)
-    for i, rot_ply in enumerate(decomp_ply_paths["rot"]):
-        quats[:, i] = uint16_to_float(
+    for rot_ply in decomp_ply_paths["rot"]:
+        stem = os.path.splitext(os.path.basename(rot_ply))[0]
+        comp_name = stem.replace("_dec", "")
+        if not comp_name.startswith("rot_"):
+            raise ValueError(f"Unexpected rotation stream name: {rot_ply}")
+        comp_idx = int(comp_name.split("_")[-1])
+        quats[:, comp_idx] = uint16_to_float(
             _read_sorted_reflectance(rot_ply),
-            metadata["Attribute"][f"rot_{i}"]["min"],
-            metadata["Attribute"][f"rot_{i}"]["max"],
+            metadata["Attribute"][f"rot_{comp_idx}"]["min"],
+            metadata["Attribute"][f"rot_{comp_idx}"]["max"],
         )
 
-    rest_rgb = np.stack(rest_rgb_channels, axis=1).astype(np.float32)
-    colors = np.concatenate([dc_rgb, rest_rgb], axis=1).astype(np.float32)
+    if not decomp_ply_paths["rot"]:
+        raise ValueError("No rotation streams were decoded")
+
+    if np.allclose(quats[:, 0], 0.0):
+        xyz_sq = np.sum(np.square(quats[:, 1:4]), axis=1)
+        quats[:, 0] = np.sqrt(np.clip(1.0 - xyz_sq, 0.0, 1.0)).astype(np.float32)
+
+    quat_norm = np.linalg.norm(quats, axis=1, keepdims=True)
+    quats = quats / np.maximum(quat_norm, 1e-12)
+
+    if rest_rgb_channels:
+        rest_rgb = np.stack(rest_rgb_channels, axis=1).astype(np.float32)
+        colors = np.concatenate([dc_rgb, rest_rgb], axis=1).astype(np.float32)
+    else:
+        colors = dc_rgb.astype(np.float32)
 
     save_videogs_ply_from_arrays(
-        means=points_ref.astype(np.float32),
+        means=points_world,
         colors=colors,
         opacity=opacity_denorm.astype(np.float32),
         scales=scales.astype(np.float32),
@@ -721,10 +775,31 @@ def parse_args():
     return parser.parse_args()
 
 
+def _resolve_input_checkpoint_dir(input_dir: str, frame_idx: int) -> str | None:
+    base = Path(input_dir)
+    candidates = [
+        base / str(frame_idx) / "point_cloud",
+        base / f"{frame_idx:04d}" / "point_cloud",
+        base / "frames" / f"{frame_idx:04d}" / "point_cloud",
+        base / "frames" / str(frame_idx) / "point_cloud",
+    ]
+    for cand in candidates:
+        if cand.is_dir():
+            return str(cand)
+    return None
+
+
+def _build_output_ply_path(output_ply_dir: str, frame_idx: int, queen_layout: bool) -> str:
+    if queen_layout:
+        return str(Path(output_ply_dir) / "frames" / f"{frame_idx:04d}" / "point_cloud.ply")
+    return str(Path(output_ply_dir) / str(frame_idx) / "point_cloud" / "point_cloud.ply")
+
+
 def main():
     args = parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
     os.makedirs(args.output_ply_dir, exist_ok=True)
+    queen_layout = Path(args.input_dir, "frames").is_dir()
 
     qp_config = {
         "qp_rest": args.qp_rest,
@@ -734,8 +809,8 @@ def main():
 
     benchmark_rows = []
     for frame_idx in range(args.frame_start, args.frame_start + args.num_frames):
-        ckpt_path = os.path.join(args.input_dir, str(frame_idx), "point_cloud")
-        if not os.path.exists(ckpt_path):
+        ckpt_path = _resolve_input_checkpoint_dir(args.input_dir, frame_idx)
+        if ckpt_path is None:
             continue
 
         max_iter = search_for_max_iteration(ckpt_path)
@@ -744,7 +819,7 @@ def main():
             continue
 
         frame_output_dir = os.path.join(args.output_dir, f"frame_{frame_idx}")
-        frame_output_ply = os.path.join(args.output_ply_dir, str(frame_idx), "point_cloud", "point_cloud.ply")
+        frame_output_ply = _build_output_ply_path(args.output_ply_dir, frame_idx, queen_layout)
 
         enc = encode_gpcc(
             ply_path=ply_path,

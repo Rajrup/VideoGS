@@ -27,6 +27,7 @@ from typing import Callable, TypeVar
 RUN_DRY_RUN = False
 RUN_SKIP_COMPLETED_RUNS = False
 RUN_OVERWRITE_CSV_RES = True
+RUN_SAVE_EVAL_IMAGES = True
 RUN_CUDA_DEVICES: tuple[str, ...] = ("0", "1")
 
 HIFI4G_DATA_ROOT = "/synology/rajrup/VideoGS"
@@ -55,38 +56,38 @@ DRACOGS_ET: tuple[int, ...] = (0, 8, 12, 16)
 DRACOGS_ES: tuple[int, ...] = (0, 8, 12, 16)
 DRACOGS_CL = 10
 
-GPCC_TMC3_PATH = "/home/haodongw/workspace/mpeg-pcc-tmc13/build/tmc3/tmc3"
+GPCC_TMC3_PATH = "/ssd1/haodongw/workspace/3dstream/mpeg-pcc-tmc13/build/tmc3/tmc3"
 GPCC_OCTREE_DEPTHS_BY_DATASET: dict[str, tuple[int, ...]] = {
-    "HiFi4G": (15,),
-    "N3DV": (15,),
+    "HiFi4G": (12,),
+    "N3DV": (17,),
 }
 GPCC_QP_COMBOS: tuple[tuple[int, int, int], ...] = (  # (qp_rest, qp_dc, qp_opacity)
-    (40, 4, 16), # (40, 4, 34), (40, 4, 40),
+    # (40, 4, 16), (40, 4, 34), (40, 4, 40),
     # (40, 16, 16), (40, 16, 34), (40, 16, 40),
     # (40, 20, 16), (40, 20, 34), (40, 20, 40),
     # (40, 24, 16), (40, 24, 34), (40, 24, 40),
     # (40, 28, 16), (40, 28, 34), (40, 28, 40),
-    (38, 4, 4), # (38, 16, 4),
-    (34, 4, 4), # (34, 16, 4),
-    (31, 4, 4), # (31, 16, 4),
-    (28, 4, 4), # (28, 16, 4),
-    (38, 4, 16), # (38, 16, 16),
-    (34, 4, 16), # (34, 16, 16),
-    (31, 4, 16), # (31, 16, 16),
-    (28, 4, 16), # (28, 16, 16),
+    # (38, 4, 4), (38, 16, 4),
+    # (34, 4, 4), (34, 16, 4),
+    # (31, 4, 4), (31, 16, 4),
+    # (28, 4, 4), (28, 16, 4),
+    # (38, 4, 16), (38, 16, 16),
+    # (34, 4, 16), (34, 16, 16),
+    # (31, 4, 16), (31, 16, 16),
+    # (28, 4, 16), (28, 16, 16),
     # (38, 4, 28), (38, 16, 28),
     # (34, 4, 28), (34, 16, 28),
     # (31, 4, 28), (31, 16, 28),
     # (28, 4, 28), (28, 16, 28),
     # (16, 4, 4), (16, 16, 4),
-    (4, 4, 4), (4, 16, 4),
+    (4, 4, 4), # (4, 16, 4),
     # (16, 4, 16), (4, 4, 16),
 )
 
 
 SEQUENCE_SETTINGS: dict[str, tuple[str, ...]] = {
     "HiFi4G": (
-        "4K_Actor1_Greeting",
+        # "4K_Actor1_Greeting",
         # "4K_Actor2_Dancing",
         # "4K_Actor3_Violin",
         # "4K_Actor4_Dancing",
@@ -94,14 +95,14 @@ SEQUENCE_SETTINGS: dict[str, tuple[str, ...]] = {
         # "4K_Actor6_Changing_Clothes",
         # "4K_Actor7_Nunchaku",
     ),
-    # "N3DV": (
+    "N3DV": (
         # "cook_spinach",
         # "coffee_martini",
         # "cut_roasted_beef",
         # "flame_salmon_1",
         # "flame_steak",
-        # "sear_steak",
-    # ),
+        "sear_steak",
+    ),
 }
 
 FRAME_ID_LISTS: dict[str, tuple[int, ...]] = {
@@ -132,6 +133,7 @@ class RunConfig:
     dry_run: bool
     skip_completed_runs: bool
     overwrite_csv_res: bool
+    save_eval_images: bool
     baselines: tuple[str, ...]
     cuda_devices: tuple[str, ...]
 
@@ -197,7 +199,7 @@ N3DV = DatasetConfig(
     sh_degree=2,
     resolution=2,
     evaluation_env="queen",
-    baseline_envs={"dracogs": "queen", "mesongs": "mesongs", "videogs": "queen", "gpcc": "queen"},
+    baseline_envs={"dracogs": "queen", "mesongs": "mesongs", "videogs": "queen", "gpcc": "videogs"},
     frame_end_exclusive=False,
     mesongs_script_name="compression_decompress_pipeline.py",
     mesongs_has_resolution_arg=False,
@@ -209,6 +211,7 @@ RUN_CONFIG = RunConfig(
     dry_run=RUN_DRY_RUN,
     skip_completed_runs=RUN_SKIP_COMPLETED_RUNS,
     overwrite_csv_res=RUN_OVERWRITE_CSV_RES,
+    save_eval_images=RUN_SAVE_EVAL_IMAGES,
     baselines=RUN_BASELINES,
     cuda_devices=RUN_CUDA_DEVICES,
 )
@@ -394,6 +397,7 @@ def run_evaluation(
     output_folder: str,
     dry_run: bool,
     cuda_device: str,
+    save_eval_images: bool = False,
 ) -> None:
     fs, fe, iv = _frame_span(cfg, frame_id)
     gt = _gt_model_path(cfg, sequence)
@@ -401,52 +405,58 @@ def run_evaluation(
     project_root = _project_root(cfg)
 
     if cfg.name == "HiFi4G":
+        eval_args = [
+            "--gt_ply_path",
+            gt,
+            "--decompressed_ply_path",
+            f"{output_folder}/decompressed_ply",
+            "--dataset_path",
+            ds,
+            "--output_render_path",
+            f"{output_folder}/evaluation",
+            "--sh_degree",
+            str(cfg.sh_degree),
+            "--resolution",
+            str(cfg.resolution),
+            "--frame_start",
+            str(fs),
+            "--frame_end",
+            str(fe),
+            "--interval",
+            str(iv),
+        ]
+        if save_eval_images:
+            eval_args.append("--save_renders")
         cmd = conda_python_cmd(
             cfg.evaluation_env,
             project_root / "scripts" / "evaluate_decompress.py",
-            [
-                "--gt_ply_path",
-                gt,
-                "--decompressed_ply_path",
-                f"{output_folder}/decompressed_ply",
-                "--dataset_path",
-                ds,
-                "--output_render_path",
-                f"{output_folder}/evaluation",
-                "--sh_degree",
-                str(cfg.sh_degree),
-                "--resolution",
-                str(cfg.resolution),
-                "--frame_start",
-                str(fs),
-                "--frame_end",
-                str(fe),
-                "--interval",
-                str(iv),
-            ],
+            eval_args,
         )
     else:
+        eval_args = [
+            "--config",
+            "configs/dynerf.yaml",
+            "-s",
+            ds,
+            "-m",
+            gt,
+            "--decompressed_ply_path",
+            f"{output_folder}/decompressed_ply",
+            "--output_render_path",
+            f"{output_folder}/evaluation",
+            "--frame_start",
+            str(fs),
+            "--frame_end",
+            str(fe),
+            "--interval",
+            str(iv),
+        ]
+        if save_eval_images:
+            eval_args.append("--save_renders")
         cmd = conda_python_cmd(
             cfg.evaluation_env,
             project_root / "scripts" / "evaluate_decompress.py",
-            [
-                "--config",
-                "configs/dynerf.yaml",
-                "-s",
-                ds,
-                "-m",
-                gt,
-                "--decompressed_ply_path",
-                f"{output_folder}/decompressed_ply",
-                "--output_render_path",
-                f"{output_folder}/evaluation",
-                "--frame_start",
-                str(fs),
-                "--frame_end",
-                str(fe),
-                "--interval",
-                str(iv),
-            ],
+            eval_args,
         )
     run_cmd(cmd, cwd=project_root, dry_run=dry_run, cuda_device=cuda_device)
 
@@ -456,6 +466,7 @@ def run_videogs_rd(
     sequence: str,
     dry_run: bool,
     skip_completed_runs: bool,
+    save_eval_images: bool = False,
 ) -> list[tuple[str, str, str]]:
     gt = _gt_model_path(cfg, sequence)
     project_root = _project_root(cfg)
@@ -497,7 +508,7 @@ def run_videogs_rd(
         )
         try:
             run_cmd(cmd, cwd=project_root, dry_run=dry_run, cuda_device=cuda_device)
-            run_evaluation(cfg, sequence, frame_id, output_folder, dry_run, cuda_device)
+            run_evaluation(cfg, sequence, frame_id, output_folder, dry_run, cuda_device, save_eval_images)
         except subprocess.CalledProcessError as exc:
             print(f"WARNING: VideoGS frame={frame_id} qp={qp} failed for {cfg.name}/{sequence} (exit {exc.returncode})")
             _cleanup_partial(output_folder)
@@ -512,6 +523,7 @@ def run_mesongs_rd(
     sequence: str,
     dry_run: bool,
     skip_completed_runs: bool,
+    save_eval_images: bool = False,
 ) -> list[tuple[str, str, str]]:
     gt = _gt_model_path(cfg, sequence)
     ds = _dataset_path(cfg, sequence)
@@ -577,7 +589,7 @@ def run_mesongs_rd(
         )
         try:
             run_cmd(cmd, cwd=mesongs_root, dry_run=dry_run, cuda_device=cuda_device)
-            run_evaluation(cfg, sequence, frame_id, output_folder, dry_run, cuda_device)
+            run_evaluation(cfg, sequence, frame_id, output_folder, dry_run, cuda_device, save_eval_images)
         except subprocess.CalledProcessError as exc:
             print(f"WARNING: MesonGS {short} failed for {cfg.name}/{sequence} (exit {exc.returncode})")
             _cleanup_partial(output_folder)
@@ -592,6 +604,7 @@ def run_dracogs_rd(
     sequence: str,
     dry_run: bool,
     skip_completed_runs: bool,
+    save_eval_images: bool = False,
 ) -> list[tuple[str, str, str]]:
     gt = _gt_model_path(cfg, sequence)
     project_root = _project_root(cfg)
@@ -650,7 +663,7 @@ def run_dracogs_rd(
         )
         try:
             run_cmd(cmd, cwd=project_root, dry_run=dry_run, cuda_device=cuda_device)
-            run_evaluation(cfg, sequence, frame_id, output_folder, dry_run, cuda_device)
+            run_evaluation(cfg, sequence, frame_id, output_folder, dry_run, cuda_device, save_eval_images)
         except subprocess.CalledProcessError as exc:
             print(f"WARNING: DracoGS {short} failed for {cfg.name}/{sequence} (exit {exc.returncode})")
             _cleanup_partial(output_folder)
@@ -665,6 +678,7 @@ def run_gpcc_rd(
     sequence: str,
     dry_run: bool,
     skip_completed_runs: bool,
+    save_eval_images: bool = False,
 ) -> list[tuple[str, str, str]]:
     gt = _gt_model_path(cfg, sequence)
     project_root = _project_root(cfg)
@@ -687,7 +701,7 @@ def run_gpcc_rd(
         log_step(f"GPCC | {cfg.name} | {sequence} | {short} | cuda={cuda_device} | {timestamp()}")
         cmd = conda_python_cmd(
             cfg.baseline_envs["gpcc"],
-            project_root / "scripts" / "gpcc_baseline" / "compress_decompress_pipeline.py",
+            SCRIPTS_DIR / "gpcc_baseline" / "compress_decompress_pipeline.py",
             [
                 "--input_dir", gt,
                 "--output_dir", output_folder,
@@ -703,7 +717,7 @@ def run_gpcc_rd(
         )
         try:
             run_cmd(cmd, cwd=project_root, dry_run=dry_run, cuda_device=cuda_device)
-            run_evaluation(cfg, sequence, frame_id, output_folder, dry_run, cuda_device)
+            run_evaluation(cfg, sequence, frame_id, output_folder, dry_run, cuda_device, save_eval_images)
         except subprocess.CalledProcessError as exc:
             print(f"WARNING: GPCC {short} failed for {cfg.name}/{sequence} (exit {exc.returncode})")
             _cleanup_partial(output_folder)
@@ -715,7 +729,7 @@ def run_gpcc_rd(
 
 BASELINE_RUNNERS: dict[
     str,
-    Callable[[DatasetConfig, str, bool, bool], list[tuple[str, str, str]]],
+    Callable[[DatasetConfig, str, bool, bool, bool], list[tuple[str, str, str]]],
 ] = {
     "videogs": run_videogs_rd,
     "mesongs": run_mesongs_rd,
@@ -798,6 +812,7 @@ def main() -> None:
     baselines = _normalize_selected_items(RUN_CONFIG.baselines, "baseline")
     dry_run = bool(RUN_CONFIG.dry_run)
     overwrite_csv_res = bool(RUN_CONFIG.overwrite_csv_res)
+    save_eval_images = bool(RUN_CONFIG.save_eval_images)
     effective_skip_completed = bool(RUN_CONFIG.skip_completed_runs or not overwrite_csv_res)
 
     _validate_selected_items(datasets, set(ALL_DATASETS.keys()), "dataset")
@@ -811,6 +826,7 @@ def main() -> None:
     print(f"  Output root:         {RD_BASELINES_RESULTS_ROOT}")
     print(f"  skip-completed-runs:  {effective_skip_completed}")
     print(f"  overwrite-csv-res:    {overwrite_csv_res}")
+    print(f"  save-eval-images:     {save_eval_images}")
     print("  Collection:          delegated to plot_rd_baselines_results.py")
     if dry_run:
         print("  Mode:                DRY RUN")
@@ -835,7 +851,7 @@ def main() -> None:
                 log_header(f"{cfg.name} | {sequence}")
                 runner = BASELINE_RUNNERS[baseline]
                 step_start = time.time()
-                failures = runner(cfg, sequence, dry_run, effective_skip_completed)
+                failures = runner(cfg, sequence, dry_run, effective_skip_completed, save_eval_images)
                 failed_runs.extend(failures)
                 elapsed = int(time.time() - step_start)
                 print(f"  {baseline.upper()} | {cfg.name} | {sequence} completed in {elapsed}s")
