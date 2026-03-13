@@ -14,11 +14,14 @@ import os
 import shlex
 import shutil
 import subprocess
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
+from queue import Queue
 from typing import Any, Callable
 
 
@@ -53,7 +56,8 @@ SCRIPTS_DIR = SCRIPT_PATH.parent
 WORKSPACE_ROOT = SCRIPTS_DIR.parent.parent
 
 GPCC_TMC3_PATH = "/home/haodongw/workspace/mpeg-pcc-tmc13/build/tmc3/tmc3"
-CUDA_DEVICE = "0"
+DEFAULT_GPUS: list[int] = [0]
+DEFAULT_WORKERS_PER_GPU: int = 1
 SKIP_EXISTING = True
 
 # ===========================================================================
@@ -225,23 +229,28 @@ class ExperimentPaths:
     output_folder: str
 
 
+_LOG_LOCK = threading.Lock()
+
+
 def timestamp() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def log_header(message: str) -> None:
-    print(f"\n{'=' * 70}\n  {message}\n{'=' * 70}")
+    with _LOG_LOCK:
+        print(f"\n{'=' * 70}\n  {message}\n{'=' * 70}")
 
 
 def log_step(message: str) -> None:
-    print(f"--- {message}")
+    with _LOG_LOCK:
+        print(f"--- {message}")
 
 
-def run_cmd(cmd: list[str], cwd: Path, dry_run: bool) -> None:
+def run_cmd(cmd: list[str], cwd: Path, dry_run: bool, cuda_device: str = "0") -> None:
     env = os.environ.copy()
-    env["CUDA_VISIBLE_DEVICES"] = str(CUDA_DEVICE)
+    env["CUDA_VISIBLE_DEVICES"] = cuda_device
     if dry_run:
-        print(f"[DRY RUN] cwd={cwd} | CUDA_VISIBLE_DEVICES={CUDA_DEVICE} | {shlex.join(cmd)}")
+        log_step(f"[DRY RUN] cwd={cwd} | CUDA_VISIBLE_DEVICES={cuda_device} | {shlex.join(cmd)}")
         return
     subprocess.run(cmd, cwd=str(cwd), check=True, env=env)
 
@@ -466,6 +475,7 @@ def run_evaluation(
     frame_end: int,
     interval: int,
     dry_run: bool,
+    cuda_device: str = "0",
 ) -> None:
     project_root = _project_root(cfg)
     if cfg.name == "N3DV":
@@ -496,7 +506,7 @@ def run_evaluation(
         project_root / "scripts" / "evaluate_decompress.py",
         eval_args,
     )
-    run_cmd(cmd, cwd=project_root, dry_run=dry_run)
+    run_cmd(cmd, cwd=project_root, dry_run=dry_run, cuda_device=cuda_device)
 
 
 # ===========================================================================
@@ -509,7 +519,7 @@ def _dracogs_frame_spans(cfg: DatasetConfig, selected_frames: list[int]) -> list
     return [selected_to_span(cfg, selected_frames)]
 
 
-def run_dracogs(cfg: DatasetConfig, sequence: str, selected_frames: list[int], dry_run: bool, skip_existing: bool) -> None:
+def run_dracogs(cfg: DatasetConfig, sequence: str, selected_frames: list[int], dry_run: bool, skip_existing: bool, cuda_device: str = "0") -> None:
     project_root = _project_root(cfg)
 
     for fs, fe, iv in _dracogs_frame_spans(cfg, selected_frames):
@@ -540,8 +550,8 @@ def run_dracogs(cfg: DatasetConfig, sequence: str, selected_frames: list[int], d
             ],
         )
         try:
-            run_cmd(cmd, cwd=project_root, dry_run=dry_run)
-            run_evaluation(cfg, paths, fs, fe, iv, dry_run)
+            run_cmd(cmd, cwd=project_root, dry_run=dry_run, cuda_device=cuda_device)
+            run_evaluation(cfg, paths, fs, fe, iv, dry_run, cuda_device=cuda_device)
         except subprocess.CalledProcessError:
             _cleanup_partial(paths.output_folder)
             raise
@@ -553,7 +563,7 @@ def _mesongs_frame_spans(cfg: DatasetConfig, selected_frames: list[int]) -> list
     return [selected_to_span(cfg, selected_frames)]
 
 
-def run_mesongs(cfg: DatasetConfig, sequence: str, selected_frames: list[int], dry_run: bool, skip_existing: bool) -> None:
+def run_mesongs(cfg: DatasetConfig, sequence: str, selected_frames: list[int], dry_run: bool, skip_existing: bool, cuda_device: str = "0") -> None:
     project_root = _project_root(cfg)
     mesongs_root = _mesongs_root(cfg)
 
@@ -589,14 +599,14 @@ def run_mesongs(cfg: DatasetConfig, sequence: str, selected_frames: list[int], d
             mesongs_args,
         )
         try:
-            run_cmd(cmd, cwd=mesongs_root, dry_run=dry_run)
-            run_evaluation(cfg, paths, fs, fe, iv, dry_run)
+            run_cmd(cmd, cwd=mesongs_root, dry_run=dry_run, cuda_device=cuda_device)
+            run_evaluation(cfg, paths, fs, fe, iv, dry_run, cuda_device=cuda_device)
         except subprocess.CalledProcessError:
             _cleanup_partial(paths.output_folder)
             raise
 
 
-def run_gpcc(cfg: DatasetConfig, sequence: str, selected_frames: list[int], dry_run: bool, skip_existing: bool) -> None:
+def run_gpcc(cfg: DatasetConfig, sequence: str, selected_frames: list[int], dry_run: bool, skip_existing: bool, cuda_device: str = "0") -> None:
     gt_model_path = _gt_model_path(cfg, sequence)
     dataset_path = _dataset_path(cfg, sequence)
     project_root = _project_root(cfg)
@@ -630,15 +640,15 @@ def run_gpcc(cfg: DatasetConfig, sequence: str, selected_frames: list[int], dry_
             ],
         )
         try:
-            run_cmd(cmd, cwd=project_root, dry_run=dry_run)
+            run_cmd(cmd, cwd=project_root, dry_run=dry_run, cuda_device=cuda_device)
             eval_paths = ExperimentPaths(dataset_path, gt_model_path, output_folder)
-            run_evaluation(cfg, eval_paths, fs, fe, iv, dry_run)
+            run_evaluation(cfg, eval_paths, fs, fe, iv, dry_run, cuda_device=cuda_device)
         except subprocess.CalledProcessError:
             _cleanup_partial(output_folder)
             raise
 
 
-def run_videogs(cfg: DatasetConfig, sequence: str, selected_frames: list[int], dry_run: bool, skip_existing: bool) -> None:
+def run_videogs(cfg: DatasetConfig, sequence: str, selected_frames: list[int], dry_run: bool, skip_existing: bool, cuda_device: str = "0") -> None:
     project_root = _project_root(cfg)
 
     for anchor_frame in sorted(set(int(v) for v in selected_frames)):
@@ -672,8 +682,8 @@ def run_videogs(cfg: DatasetConfig, sequence: str, selected_frames: list[int], d
                 ],
             )
             try:
-                run_cmd(cmd, cwd=project_root, dry_run=dry_run)
-                run_evaluation(cfg, paths, gop_start, gop_end, 1, dry_run)
+                run_cmd(cmd, cwd=project_root, dry_run=dry_run, cuda_device=cuda_device)
+                run_evaluation(cfg, paths, gop_start, gop_end, 1, dry_run, cuda_device=cuda_device)
             except subprocess.CalledProcessError:
                 _cleanup_partial(paths.output_folder)
                 raise
@@ -725,13 +735,69 @@ def get_expected_output_folders(
 
 BASELINE_RUNNERS: dict[
     str,
-    Callable[[DatasetConfig, str, list[int], bool, bool], None],
+    Callable[..., None],
 ] = {
     "dracogs": run_dracogs,
     "mesongs": run_mesongs,
     "videogs": run_videogs,
     "gpcc": run_gpcc,
 }
+
+
+# ===========================================================================
+# Parallel execution helpers
+# ===========================================================================
+
+def _build_job_list(
+    selected_datasets: list[str],
+    selected_baselines: list[str],
+) -> list[tuple[DatasetConfig, str, str, list[int]]]:
+    jobs: list[tuple[DatasetConfig, str, str, list[int]]] = []
+    for ds_name in selected_datasets:
+        dcfg = ALL_DATASETS[ds_name]
+        ds_baselines = [b for b in selected_baselines if b in dcfg.baseline_envs]
+        for sequence in dcfg.sequences:
+            for baseline in ds_baselines:
+                frame_ids = dcfg.baseline_frame_ids.get(baseline, [])
+                if frame_ids:
+                    jobs.append((dcfg, baseline, sequence, frame_ids))
+    return jobs
+
+
+def _run_job(
+    job: tuple[DatasetConfig, str, str, list[int]],
+    gpu_queue: "Queue[int]",
+    dry_run: bool,
+    skip_existing: bool,
+) -> tuple[str, str, str] | None:
+    cfg, baseline, sequence, frame_ids = job
+    gpu_id = gpu_queue.get()
+    try:
+        log_header(
+            f"{baseline.upper()} | {cfg.name} | {sequence} | "
+            f"Frames: {','.join(str(v) for v in frame_ids[:5])}... | GPU {gpu_id}"
+        )
+        runner = BASELINE_RUNNERS[baseline]
+        step_start = time.time()
+        runner(cfg, sequence, frame_ids, dry_run, skip_existing, cuda_device=str(gpu_id))
+        elapsed = int(time.time() - step_start)
+        log_step(
+            f"{baseline.upper()} | {cfg.name} | {sequence} completed in {elapsed}s (GPU {gpu_id})"
+        )
+        return None
+    except subprocess.CalledProcessError as exc:
+        log_step(
+            f"WARNING: {baseline} failed for {cfg.name}/{sequence} on GPU {gpu_id} "
+            f"(exit {exc.returncode})"
+        )
+        return (cfg.name, baseline, sequence)
+    except Exception as exc:
+        log_step(
+            f"ERROR: {baseline} failed for {cfg.name}/{sequence} on GPU {gpu_id}: {exc}"
+        )
+        return (cfg.name, baseline, sequence)
+    finally:
+        gpu_queue.put(gpu_id)
 
 
 # ===========================================================================
@@ -760,13 +826,29 @@ def parse_args() -> argparse.Namespace:
         choices=list(BASELINE_RUNNERS.keys()),
         default=ACTIVE_BASELINES,
     )
+    parser.add_argument(
+        "--gpus",
+        nargs="+",
+        type=int,
+        default=DEFAULT_GPUS,
+        help="GPU IDs to use (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--workers-per-gpu",
+        type=int,
+        default=DEFAULT_WORKERS_PER_GPU,
+        help="Concurrent processes per GPU (default: %(default)s)",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    selected_datasets = args.datasets
-    selected_baselines = args.baselines
+    selected_datasets: list[str] = args.datasets
+    selected_baselines: list[str] = args.baselines
+    gpus: list[int] = args.gpus
+    workers_per_gpu: int = args.workers_per_gpu
+    total_workers = len(gpus) * workers_per_gpu
 
     unknown_bl = [b for b in selected_baselines if b not in BASELINE_RUNNERS]
     if unknown_bl:
@@ -777,49 +859,50 @@ def main() -> None:
 
     run_start = time.time()
     log_header("Baseline Experiments Runner")
-    print(f"  Started:    {timestamp()}")
-    print(f"  Datasets:   {', '.join(selected_datasets)}")
-    print(f"  Baselines:  {', '.join(selected_baselines)}")
-    print(f"  CUDA:       {CUDA_DEVICE}")
+    print(f"  Started:      {timestamp()}")
+    print(f"  Datasets:     {', '.join(selected_datasets)}")
+    print(f"  Baselines:    {', '.join(selected_baselines)}")
+    print(f"  GPUs:         {', '.join(str(g) for g in gpus)}")
+    print(f"  Workers/GPU:  {workers_per_gpu}  (total workers: {total_workers})")
     if args.dry_run:
-        print("  Mode:       DRY RUN")
+        print("  Mode:         DRY RUN")
     if args.skip_existing:
-        print("  Skip:       existing outputs")
+        print("  Skip:         existing outputs")
 
     for ds_name in selected_datasets:
         dcfg = ALL_DATASETS[ds_name]
         print(f"  [{dcfg.name}] sequences={len(dcfg.sequences)}, sh={dcfg.sh_degree}, res={dcfg.resolution}")
     print("=" * 70)
 
-    failed_runs: list[tuple[str, str, str]] = []
-
     for ds_name in selected_datasets:
         dcfg = ALL_DATASETS[ds_name]
         ds_baselines = [b for b in selected_baselines if b in dcfg.baseline_envs]
-        if not ds_baselines:
-            continue
-        ensure_required_envs(dcfg, ds_baselines)
+        if ds_baselines:
+            ensure_required_envs(dcfg, ds_baselines)
 
-        for sequence in dcfg.sequences:
-            log_header(f"{dcfg.name} | {sequence}")
+    jobs = _build_job_list(selected_datasets, selected_baselines)
+    if not jobs:
+        print("No jobs to run.")
+        return
 
-            for baseline in ds_baselines:
-                frame_ids = dcfg.baseline_frame_ids.get(baseline, [])
-                if not frame_ids:
-                    continue
-                runner = BASELINE_RUNNERS[baseline]
-                log_header(
-                    f"{baseline.upper()} | {dcfg.name} | {sequence} | "
-                    f"Frames: {','.join(str(v) for v in frame_ids[:5])}..."
-                )
-                step_start = time.time()
-                try:
-                    runner(dcfg, sequence, frame_ids, args.dry_run, args.skip_existing)
-                except subprocess.CalledProcessError as exc:
-                    print(f"WARNING: {baseline} failed for {dcfg.name}/{sequence} (exit {exc.returncode})")
-                    failed_runs.append((dcfg.name, baseline, sequence))
-                elapsed = int(time.time() - step_start)
-                print(f"  {baseline.upper()} | {dcfg.name} | {sequence} completed in {elapsed}s")
+    print(f"\n  Total jobs: {len(jobs)}")
+
+    gpu_queue: Queue[int] = Queue()
+    for gpu_id in gpus:
+        for _ in range(workers_per_gpu):
+            gpu_queue.put(gpu_id)
+
+    failed_runs: list[tuple[str, str, str]] = []
+
+    with ThreadPoolExecutor(max_workers=total_workers) as executor:
+        futures = {
+            executor.submit(_run_job, job, gpu_queue, args.dry_run, args.skip_existing): job
+            for job in jobs
+        }
+        for future in as_completed(futures):
+            result = future.result()
+            if result is not None:
+                failed_runs.append(result)
 
     total_sec = int(time.time() - run_start)
     log_header("All experiments complete!")

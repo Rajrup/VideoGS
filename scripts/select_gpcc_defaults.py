@@ -176,7 +176,7 @@ def _find_reference(points: list[GpccPoint]) -> GpccPoint | None:
     ]
     if not candidates:
         return None
-    return max(candidates, key=lambda p: p.voxel_depth)
+    return max(candidates, key=lambda p: p.decomp_psnr)
 
 
 def select_default(
@@ -206,17 +206,11 @@ def select_default(
         return None
 
     if ref.decomp_psnr >= gt_psnr:
-        best = max(below_gt, key=lambda p: p.decomp_psnr)
-    else:
-        psnr_threshold = ref.decomp_psnr - PSNR_TOLERANCE
-        candidates = [p for p in below_gt if p.decomp_psnr >= psnr_threshold]
-        if not candidates:
-            print(
-                f"  [SKIP] {dataset_name}/{sequence}: no candidates within {PSNR_TOLERANCE} dB of reference "
-                f"(ref={ref.decomp_psnr:.2f}, gt={gt_psnr:.2f})"
-            )
-            return None
-        best = min(candidates, key=lambda p: p.total_compressed_bytes)
+        ref = max(below_gt, key=lambda p: p.decomp_psnr)
+
+    psnr_threshold = ref.decomp_psnr - PSNR_TOLERANCE
+    candidates = [p for p in below_gt if p.decomp_psnr >= psnr_threshold]
+    best = min(candidates, key=lambda p: p.total_compressed_bytes)
 
     print(
         f"  {dataset_name}/{sequence}: J={best.voxel_depth} rest={best.qp_rest} "
