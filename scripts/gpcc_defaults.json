@@ -1,0 +1,80 @@
+{
+  "4K_Actor1_Greeting": {
+    "voxel_depth": 11,
+    "qp_rest": 28,
+    "qp_dc": 16,
+    "qp_opacity": 28
+  },
+  "4K_Actor2_Dancing": {
+    "voxel_depth": 11,
+    "qp_rest": 28,
+    "qp_dc": 16,
+    "qp_opacity": 28
+  },
+  "4K_Actor3_Violin": {
+    "voxel_depth": 8,
+    "qp_rest": 40,
+    "qp_dc": 28,
+    "qp_opacity": 40
+  },
+  "4K_Actor4_Dancing": {
+    "voxel_depth": 8,
+    "qp_rest": 40,
+    "qp_dc": 28,
+    "qp_opacity": 40
+  },
+  "4K_Actor5_Oil-paper_Umbrella": {
+    "voxel_depth": 8,
+    "qp_rest": 40,
+    "qp_dc": 28,
+    "qp_opacity": 40
+  },
+  "4K_Actor6_Changing_Clothes": {
+    "voxel_depth": 8,
+    "qp_rest": 40,
+    "qp_dc": 28,
+    "qp_opacity": 40
+  },
+  "4K_Actor7_Nunchaku": {
+    "voxel_depth": 11,
+    "qp_rest": 28,
+    "qp_dc": 16,
+    "qp_opacity": 28
+  },
+  "cook_spinach": {
+    "voxel_depth": 13,
+    "qp_rest": 16,
+    "qp_dc": 16,
+    "qp_opacity": 4
+  },
+  "coffee_martini": {
+    "voxel_depth": 16,
+    "qp_rest": 4,
+    "qp_dc": 4,
+    "qp_opacity": 16
+  },
+  "cut_roasted_beef": {
+    "voxel_depth": 14,
+    "qp_rest": 16,
+    "qp_dc": 4,
+    "qp_opacity": 16
+  },
+  "flame_salmon_1": {
+    "voxel_depth": 17,
+    "qp_rest": 28,
+    "qp_dc": 16,
+    "qp_opacity": 28
+  },
+  "flame_steak": {
+    "voxel_depth": 13,
+    "qp_rest": 16,
+    "qp_dc": 4,
+    "qp_opacity": 16
+  },
+  "sear_steak": {
+    "voxel_depth": 13,
+    "qp_rest": 16,
+    "qp_dc": 16,
+    "qp_opacity": 4
+  }
+}

@@ -18,6 +18,7 @@ try:
     import matplotlib
 
     matplotlib.use("Agg")
+    import matplotlib.figure as mfigure
     import matplotlib.pyplot as plt
 except ImportError as exc:
     raise SystemExit(
@@ -37,7 +38,7 @@ PLOT_OUTPUT_DIR = str(DEFAULT_PLOTS_DIR)
 PLOT_DATASETS: list[str] | None = None
 PLOT_SEQUENCES: list[str] | None = []
 PLOT_VIDEOGS_GROUP_SIZES: list[int] | None = [20]
-PLOT_FORCE_RECOLLECT = True
+PLOT_FORCE_RECOLLECT = False
 
 # -- Per-sequence DracoGS sweep overrides -----------------------------------
 DRACOGS_SWEEP_OVERRIDES: dict[str, dict[str, Any]] = {
@@ -68,7 +69,20 @@ LIVOGS_DATA_PATHS: dict[str, str | None] = {
 }
 LIVOGS_RD_SUBDIR: str = "livogs_rd_new"
 
-RD_BASELINES_ORDER = ["VideoGS", "LivoGS", "DracoGS", "MesonGS", "GPCC"]
+RD_BASELINES = [
+    "LivoGS",
+    "VideoGS",
+    "DracoGS",
+    "MesonGS",
+    "GPCC"
+]
+BASELINE_DISPLAY_NAMES: dict[str, str] = {
+    "LivoGS": "GS-NFS (Ours)",
+    "VideoGS": r"V$^3$-2D",
+    "DracoGS": "LTS-Draco",
+    "GPCC": "G-PCC",
+}
+
 RD_BASELINES_STYLES: dict[str, dict[str, Any]] = {
     "VideoGS": {"color": "#d62728", "marker": "^", "alpha": 0.7, "size": 35},
     "LivoGS": {"color": "#ff7f0e", "marker": "D", "alpha": 0.7, "size": 35},
@@ -535,20 +549,21 @@ def _collect_gpcc_rows(runner: Any, cfg: Any, sequence: str) -> list[dict[str, A
     return rows
 
 
-def plot_group(
+def _render_rd_plot(
     dataset: str,
     sequence: str,
     frame_id: int,
     rows: list[dict[str, Any]],
-    output_root: str,
-) -> None:
+    *,
+    frontier_only: bool = False,
+) -> mfigure.Figure:
     fig, ax = plt.subplots(figsize=(10, 7))
 
     by_baseline: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         by_baseline[str(row.get("baseline", ""))].append(row)
 
-    for baseline in RD_BASELINES_ORDER:
+    for baseline in RD_BASELINES:
         style = RD_BASELINES_STYLES[baseline]
         baseline_rows = by_baseline.get(baseline, [])
 
@@ -560,13 +575,15 @@ def plot_group(
             if not hull_pts:
                 continue
             hx, hy = zip(*hull_pts)
+            display_name = BASELINE_DISPLAY_NAMES.get("LivoGS", "LivoGS")
+            label = display_name if frontier_only else f"{display_name} ({len(hull_pts)} pts)"
             ax.scatter(
                 hx, hy,
                 color=style["color"],
                 marker=style["marker"],
                 s=style["size"],
                 alpha=style["alpha"],
-                label=f"LivoGS ({len(hull_pts)} pts)",
+                label=label,
                 edgecolors="none",
                 zorder=3,
             )
@@ -587,19 +604,30 @@ def plot_group(
         if not xs or not ys:
             continue
 
+        frontier = pareto_frontier(list(zip(xs, ys)))
+        display_name = BASELINE_DISPLAY_NAMES.get(baseline, baseline)
+
+        if frontier_only:
+            if not frontier:
+                continue
+            plot_xs, plot_ys = zip(*frontier)
+            label = display_name
+        else:
+            plot_xs, plot_ys = xs, ys
+            label = f"{display_name} ({len(xs)} pts)"
+
         ax.scatter(
-            xs,
-            ys,
+            plot_xs,
+            plot_ys,
             color=style["color"],
             marker=style["marker"],
             s=style["size"],
             alpha=style["alpha"],
-            label=f"{baseline} ({len(xs)} pts)",
+            label=label,
             edgecolors="none",
             zorder=3,
         )
 
-        frontier = pareto_frontier(list(zip(xs, ys)))
         if len(frontier) >= 2:
             fx, fy = zip(*frontier)
             ax.plot(
@@ -623,19 +651,44 @@ def plot_group(
             zorder=1,
         )
 
-    ax.set_xlabel("Compressed Size (MB)")
-    ax.set_ylabel("PSNR (dB)")
-    ax.set_title(f"R-D Curve | {dataset} | {sequence} | Frame {frame_id}")
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc="lower right", fontsize=9)
+    if frontier_only:
+        ax.set_xlabel("Compressed Size (MB)", fontsize=20)
+        ax.set_ylabel("PSNR (dB)", fontsize=20)
+        ax.tick_params(axis="both", labelsize=20)
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="lower right", fontsize=20, markerscale=2)
+    else:
+        ax.set_xlabel("Compressed Size (MB)")
+        ax.set_ylabel("PSNR (dB)")
+        ax.set_title(f"R-D Curve | {dataset} | {sequence} | Frame {frame_id}")
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="lower right", fontsize=9, markerscale=2)
     fig.tight_layout()
+    return fig
 
+
+def plot_group(
+    dataset: str,
+    sequence: str,
+    frame_id: int,
+    rows: list[dict[str, Any]],
+    output_root: str,
+) -> None:
     dataset_dir = os.path.join(output_root, dataset)
     os.makedirs(dataset_dir, exist_ok=True)
-    out_path = os.path.join(dataset_dir, f"rd_baselines_curve_{sequence}_frame{frame_id}.png")
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    print(f"Saved: {out_path}")
+    stem = f"rd_baselines_curve_{sequence}_frame{frame_id}"
+
+    fig_png = _render_rd_plot(dataset, sequence, frame_id, rows, frontier_only=False)
+    out_png = os.path.join(dataset_dir, f"{stem}.png")
+    fig_png.savefig(out_png, dpi=150)
+    plt.close(fig_png)
+    print(f"Saved: {out_png}")
+
+    fig_pdf = _render_rd_plot(dataset, sequence, frame_id, rows, frontier_only=True)
+    out_pdf = os.path.join(dataset_dir, f"{stem}.pdf")
+    fig_pdf.savefig(out_pdf)
+    plt.close(fig_pdf)
+    print(f"Saved: {out_pdf}")
 
 
 @contextmanager
@@ -668,18 +721,19 @@ def _group_plot_rows(rows: list[dict[str, Any]]) -> dict[tuple[str, str, int], l
 def main() -> None:
     csv_path = PLOT_CSV_PATH
     os.makedirs(PLOT_OUTPUT_DIR, exist_ok=True)
-    print(f"Input CSV:  {csv_path}")
     print(f"Output dir: {PLOT_OUTPUT_DIR}")
 
     if PLOT_FORCE_RECOLLECT:
         print("Re-collecting baseline results ...")
         runner = _load_runner_module()
-        collectors = {
+        all_collectors = {
             "videogs": _collect_videogs_rows,
             "mesongs": _collect_mesongs_rows,
             "dracogs": _collect_dracogs_rows,
             "gpcc": _collect_gpcc_rows,
         }
+        active_baselines = {b.lower() for b in RD_BASELINES}
+        collectors = {k: v for k, v in all_collectors.items() if k in active_baselines}
 
         allowed_datasets = set(PLOT_DATASETS) if PLOT_DATASETS else None
         allowed_sequences = set(PLOT_SEQUENCES) if PLOT_SEQUENCES else None
@@ -726,6 +780,7 @@ def main() -> None:
                 writer.writerow(row)
         print(f"  Collected {len(all_rows)} total rows -> {csv_path}")
     else:
+        print(f"Input CSV:  {csv_path}")
         if not os.path.isfile(csv_path):
             raise FileNotFoundError(f"CSV not found: {csv_path}")
         rows = read_rows(csv_path)

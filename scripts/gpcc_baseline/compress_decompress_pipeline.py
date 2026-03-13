@@ -771,17 +771,52 @@ def parse_args():
     return parser.parse_args()
 
 
-def _resolve_input_checkpoint_dir(input_dir: str, frame_idx: int) -> str | None:
+def _resolve_input_ply(input_dir: str, frame_idx: int) -> str | None:
+    """Resolve the input PLY path for a given frame index.
+
+    Resolution order per frame directory (matches evaluate_decompress.py
+    ``find_ply_path`` — canonical PLY first, iteration checkpoint second):
+
+      1. Canonical ``point_cloud.ply`` sitting directly inside the frame dir.
+      2. Latest ``iteration_<N>/point_cloud.ply`` inside a ``point_cloud/``
+         sub-directory.
+
+    Frame directory candidates (first hit wins):
+
+      - ``{input_dir}/{frame_idx}``
+      - ``{input_dir}/{frame_idx:04d}``
+      - ``{input_dir}/frames/{frame_idx:04d}``
+      - ``{input_dir}/frames/{frame_idx}``
+    """
     base = Path(input_dir)
-    candidates = [
-        base / str(frame_idx) / "point_cloud",
-        base / f"{frame_idx:04d}" / "point_cloud",
-        base / "frames" / f"{frame_idx:04d}" / "point_cloud",
-        base / "frames" / str(frame_idx) / "point_cloud",
+    frame_dirs = [
+        base / str(frame_idx),
+        base / f"{frame_idx:04d}",
+        base / "frames" / f"{frame_idx:04d}",
+        base / "frames" / str(frame_idx),
     ]
-    for cand in candidates:
-        if cand.is_dir():
-            return str(cand)
+
+    for frame_dir in frame_dirs:
+        if not frame_dir.is_dir():
+            continue
+
+        # 1. Prefer canonical PLY (matches evaluate_decompress.py)
+        canonical = frame_dir / "point_cloud.ply"
+        if canonical.is_file():
+            return str(canonical)
+
+        # 2. Fall back to iteration checkpoint
+        iter_dir = frame_dir / "point_cloud"
+        if iter_dir.is_dir():
+            try:
+                max_iter = search_for_max_iteration(str(iter_dir))
+            except ValueError:
+                continue
+            if max_iter > 0:
+                iter_ply = iter_dir / f"iteration_{max_iter}" / "point_cloud.ply"
+                if iter_ply.is_file():
+                    return str(iter_ply)
+
     return None
 
 
@@ -805,13 +840,8 @@ def main():
 
     benchmark_rows = []
     for frame_idx in range(args.frame_start, args.frame_start + args.num_frames):
-        ckpt_path = _resolve_input_checkpoint_dir(args.input_dir, frame_idx)
-        if ckpt_path is None:
-            continue
-
-        max_iter = search_for_max_iteration(ckpt_path)
-        ply_path = os.path.join(ckpt_path, f"iteration_{max_iter}", "point_cloud.ply")
-        if not os.path.exists(ply_path):
+        ply_path = _resolve_input_ply(args.input_dir, frame_idx)
+        if ply_path is None:
             continue
 
         frame_output_dir = os.path.join(args.output_dir, f"frame_{frame_idx}")

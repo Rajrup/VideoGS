@@ -27,15 +27,20 @@ from typing import Callable, TypeVar
 RUN_DRY_RUN = False
 RUN_SKIP_COMPLETED_RUNS = False
 RUN_OVERWRITE_CSV_RES = True
-RUN_SAVE_EVAL_IMAGES = False
+RUN_SAVE_EVAL_IMAGES: dict[str, bool] = {
+    "videogs": False,
+    "mesongs": False,
+    "dracogs": False,
+    "gpcc": False,
+}
 RUN_CUDA_DEVICES: tuple[str, ...] = ("0", "1")
 
 HIFI4G_DATA_ROOT = "/synology/rajrup/VideoGS"
 N3DV_DATA_ROOT = "/synology/rajrup/Queen"
 RUN_BASELINES: tuple[str, ...] = (
-    # "videogs",
-    # "dracogs",
-    # "mesongs",
+    "videogs",
+    "dracogs",
+    "mesongs",
     "gpcc",
 )
 
@@ -56,7 +61,7 @@ DRACOGS_ET: tuple[int, ...] = (0, 8, 12, 16)
 DRACOGS_ES: tuple[int, ...] = (0, 8, 12, 16)
 DRACOGS_CL = 10
 
-GPCC_TMC3_PATH = "/ssd1/haodongw/workspace/3dstream/mpeg-pcc-tmc13/build/tmc3/tmc3"
+GPCC_TMC3_PATH = "/home/haodongw/workspace/mpeg-pcc-tmc13/build/tmc3/tmc3"
 GPCC_OCTREE_DEPTHS_BY_DATASET: dict[str, tuple[int, ...]] = {
     "HiFi4G": (8, 9, 10, 11, 12,),
     "N3DV": (12, 13, 14, 15, 16, 17,),
@@ -133,7 +138,7 @@ class RunConfig:
     dry_run: bool
     skip_completed_runs: bool
     overwrite_csv_res: bool
-    save_eval_images: bool
+    save_eval_images: dict[str, bool]
     baselines: tuple[str, ...]
     cuda_devices: tuple[str, ...]
 
@@ -812,7 +817,7 @@ def main() -> None:
     baselines = _normalize_selected_items(RUN_CONFIG.baselines, "baseline")
     dry_run = bool(RUN_CONFIG.dry_run)
     overwrite_csv_res = bool(RUN_CONFIG.overwrite_csv_res)
-    save_eval_images = bool(RUN_CONFIG.save_eval_images)
+    save_eval_images_map = RUN_CONFIG.save_eval_images
     effective_skip_completed = bool(RUN_CONFIG.skip_completed_runs or not overwrite_csv_res)
 
     _validate_selected_items(datasets, set(ALL_DATASETS.keys()), "dataset")
@@ -826,7 +831,8 @@ def main() -> None:
     print(f"  Output root:         {RD_BASELINES_RESULTS_ROOT}")
     print(f"  skip-completed-runs:  {effective_skip_completed}")
     print(f"  overwrite-csv-res:    {overwrite_csv_res}")
-    print(f"  save-eval-images:     {save_eval_images}")
+    active = [b for b, v in save_eval_images_map.items() if v]
+    print(f"  save-eval-images:     {', '.join(active) if active else 'none'}")
     print("  Collection:          delegated to plot_rd_baselines_results.py")
     if dry_run:
         print("  Mode:                DRY RUN")
@@ -851,7 +857,7 @@ def main() -> None:
                 log_header(f"{cfg.name} | {sequence}")
                 runner = BASELINE_RUNNERS[baseline]
                 step_start = time.time()
-                failures = runner(cfg, sequence, dry_run, effective_skip_completed, save_eval_images)
+                failures = runner(cfg, sequence, dry_run, effective_skip_completed, save_eval_images_map.get(baseline, False))
                 failed_runs.extend(failures)
                 elapsed = int(time.time() - step_start)
                 print(f"  {baseline.upper()} | {cfg.name} | {sequence} completed in {elapsed}s")
