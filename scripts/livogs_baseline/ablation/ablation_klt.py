@@ -31,22 +31,21 @@ from tqdm import tqdm
 # ---------------------------------------------------------------------------
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _SCRIPTS_DIR = os.path.dirname(_THIS_DIR)                       # livogs_baseline/
-_QUEEN_ROOT = os.path.dirname(os.path.dirname(_SCRIPTS_DIR))    # Queen/
-_LIVOGS_COMPRESSION = os.path.join(_QUEEN_ROOT, "LiVoGS", "compression")
-for p in (_QUEEN_ROOT, _LIVOGS_COMPRESSION):
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(_SCRIPTS_DIR))
+_LIVOGS_COMPRESSION = os.path.join(_PROJECT_ROOT, "LiVoGS", "compression")
+for p in (_PROJECT_ROOT, _LIVOGS_COMPRESSION):
     if p not in sys.path:
         sys.path.insert(0, p)
 
 from compress_decompress import encode_livogs, decode_livogs
 
-# Reuse QUEEN PLY helpers from the pipeline
 sys.path.insert(0, _SCRIPTS_DIR)
-from compress_decompress_pipeline import (
-    load_queen_ply,
-    find_queen_ply_path,
-    save_queen_ply,
-    searchForMaxIteration,
-)
+from scripts.livogs_baseline import compress_decompress_pipeline as pipeline
+
+searchForMaxIteration = pipeline.searchForMaxIteration
+load_queen_ply = getattr(pipeline, "load_queen_ply", None)
+find_queen_ply_path = getattr(pipeline, "find_queen_ply_path", None)
+save_queen_ply = getattr(pipeline, "save_queen_ply", None)
 
 # ---------------------------------------------------------------------------
 # Variant definitions
@@ -232,6 +231,14 @@ def main():
     if args.J is None:
         args.J = FORMAT_DEFAULTS[args.format]["J"]
 
+    if args.format == "queen" and (
+        load_queen_ply is None or find_queen_ply_path is None or save_queen_ply is None
+    ):
+        raise RuntimeError(
+            "queen format requested, but Queen PLY helpers are unavailable in "
+            "scripts/livogs_baseline/compress_decompress_pipeline.py"
+        )
+
     nvcomp_algorithm = None if args.nvcomp_algorithm == "None" else args.nvcomp_algorithm
 
     # Build quantize_step dict (uniform QP for all attributes)
@@ -259,47 +266,52 @@ def main():
     # ---------------------------------------------------------------------------
     # PLY I/O dispatch
     # ---------------------------------------------------------------------------
-    if args.format == "queen":
-        def _load_frame(frame_id):
+    queen_load = load_queen_ply
+    queen_find = find_queen_ply_path
+    queen_save = save_queen_ply
+
+    def _load_frame(frame_id):
+        if args.format == "queen":
+            if queen_load is None or queen_find is None:
+                raise RuntimeError("queen PLY helpers are unavailable")
             frame_str = str(frame_id).zfill(4)
             frame_dir = os.path.join(args.ply_path, "frames", frame_str)
-            ply_file = find_queen_ply_path(frame_dir)
+            ply_file = queen_find(frame_dir)
             if ply_file is None:
                 return None, 0
-            params, uncomp = load_queen_ply(ply_file, device=device)
+            params, uncomp = queen_load(ply_file, device=device)
             return params, uncomp
 
-        def _save_decoded(decoded_params, variant, frame_id):
-            if not args.save_ply:
-                return
+        ply_file = find_videogs_ply_path(args.ply_path, frame_id)
+        if ply_file is None:
+            return None, 0
+        params, uncomp = load_videogs_ply(ply_file, device=device)
+        return params, uncomp
+
+    def _save_decoded(decoded_params, variant, frame_id):
+        if not args.save_ply:
+            return
+        if args.format == "queen":
+            if queen_save is None:
+                raise RuntimeError("queen PLY helpers are unavailable")
             frame_str = str(frame_id).zfill(4)
             ply_dir = os.path.join(
                 args.output_folder, variant, "decompressed_ply", "frames", frame_str,
             )
             os.makedirs(ply_dir, exist_ok=True)
-            save_queen_ply(
+            queen_save(
                 decoded_params, os.path.join(ply_dir, "point_cloud.ply"), args.sh_degree,
             )
+            return
 
-    else:  # videogs
-        def _load_frame(frame_id):
-            ply_file = find_videogs_ply_path(args.ply_path, frame_id)
-            if ply_file is None:
-                return None, 0
-            params, uncomp = load_videogs_ply(ply_file, device=device)
-            return params, uncomp
-
-        def _save_decoded(decoded_params, variant, frame_id):
-            if not args.save_ply:
-                return
-            ply_dir = os.path.join(
-                args.output_folder, variant, "decompressed_ply",
-                str(frame_id), "point_cloud",
-            )
-            os.makedirs(ply_dir, exist_ok=True)
-            save_videogs_ply(
-                decoded_params, os.path.join(ply_dir, "point_cloud.ply"), args.sh_degree,
-            )
+        ply_dir = os.path.join(
+            args.output_folder, variant, "decompressed_ply",
+            str(frame_id), "point_cloud",
+        )
+        os.makedirs(ply_dir, exist_ok=True)
+        save_videogs_ply(
+            decoded_params, os.path.join(ply_dir, "point_cloud.ply"), args.sh_degree,
+        )
 
     os.makedirs(args.output_folder, exist_ok=True)
 

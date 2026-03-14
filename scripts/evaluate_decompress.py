@@ -107,6 +107,83 @@ def load_test_cameras(dataset_path, first_frame, resolution, llffhold=8):
     return cameras, cam_file_paths, cam_resolutions
 
 
+def load_n3dv_test_cameras(model_path, dataset_path, first_frame, resolution, llffhold=8):
+    """Load N3DV test cameras from cameras.json and first-frame images."""
+
+    cameras_json_path = os.path.join(model_path, "cameras.json")
+    with open(cameras_json_path) as f:
+        camera_entries = json.load(f)
+
+    cam_dirs = []
+    for name in os.listdir(dataset_path):
+        full_path = os.path.join(dataset_path, name)
+        if os.path.isdir(full_path) and name.startswith("cam") and name[3:].isdigit():
+            cam_dirs.append(int(name[3:]))
+    cam_dirs = sorted(cam_dirs)
+
+    n_cameras = len(cam_dirs)
+    if n_cameras == 0:
+        raise FileNotFoundError(f"No camXX directories found in dataset path: {dataset_path}")
+    if len(camera_entries) < n_cameras:
+        raise ValueError(
+            f"cameras.json has {len(camera_entries)} entries, but dataset has {n_cameras} cameras"
+        )
+
+    camera_entries = camera_entries[:n_cameras]
+
+    all_indices = list(range(n_cameras))
+    test_indices = [idx for idx in all_indices if idx % llffhold == 0]
+
+    print(f"Total cameras: {n_cameras}, Test cameras (llffhold={llffhold}): {len(test_indices)}")
+    print(f"Test camera indices: {[cam_dirs[idx] for idx in test_indices]}")
+
+    cameras = []
+    cam_indices = []
+    cam_resolutions = []
+    frame_str = str(int(first_frame)).zfill(4)
+
+    for uid, idx in enumerate(test_indices):
+        entry = camera_entries[idx]
+        cam_idx = cam_dirs[idx]
+        cam_indices.append(cam_idx)
+
+        rot = np.array(entry["rotation"])
+        pos = np.array(entry["position"])
+        R = rot
+        T = -rot.T @ pos
+        FoVx = focal2fov(entry["fx"], entry["width"])
+        FoVy = focal2fov(entry["fy"], entry["height"])
+
+        image_path = os.path.join(dataset_path, f"cam{cam_idx:02d}", "images", f"{frame_str}.png")
+        image_pil = Image.open(image_path).convert("RGB")
+        orig_w, orig_h = image_pil.size
+
+        if resolution in [1, 2, 4, 8]:
+            target_res = (round(orig_w / resolution), round(orig_h / resolution))
+        else:
+            target_res = (orig_w, orig_h)
+
+        cam_resolutions.append(target_res)
+        resized_image = PILtoTorch(image_pil, target_res)
+        gt_image = resized_image[:3, ...]
+
+        cam = Camera(
+            colmap_id=cam_idx,
+            R=R,
+            T=T,
+            FoVx=FoVx,
+            FoVy=FoVy,
+            image=gt_image,
+            gt_alpha_mask=None,
+            image_name=f"cam{cam_idx:02d}_{frame_str}",
+            uid=uid,
+            data_device="cpu",
+        )
+        cameras.append(cam)
+
+    return cameras, cam_indices, cam_resolutions
+
+
 def _load_single_image(args):
     """Load and resize a single image. Runs in a thread."""
     image_path, target_res = args
@@ -126,6 +203,39 @@ def update_camera_images(cameras, dataset_path, frame, cam_file_paths, cam_resol
         images = list(executor.map(_load_single_image, load_args))
     for idx, cam in enumerate(cameras):
         cam.original_image = images[idx]
+
+
+def update_n3dv_images(cameras, dataset_path, frame, cam_indices, cam_resolutions):
+    """Swap GT images for N3DV cameras for a new frame. Loads test images in parallel."""
+    frame_str = str(int(frame)).zfill(4)
+    load_args = [
+        (os.path.join(dataset_path, f"cam{cam_idx:02d}", "images", f"{frame_str}.png"), cam_resolutions[idx])
+        for idx, cam_idx in enumerate(cam_indices)
+    ]
+    with ThreadPoolExecutor(max_workers=len(cameras)) as executor:
+        images = list(executor.map(_load_single_image, load_args))
+    for idx, cam in enumerate(cameras):
+        cam.original_image = images[idx]
+
+
+def find_n3dv_ply_path(base_path, frame_id):
+    """Find N3DV point cloud path for a frame."""
+    frame_str = str(frame_id).zfill(4)
+    canonical_path = os.path.join(base_path, "frames", frame_str, "point_cloud.ply")
+    if os.path.exists(canonical_path):
+        return canonical_path
+
+    iter_root = os.path.join(base_path, "frames", frame_str, "point_cloud")
+    if os.path.exists(iter_root):
+        max_iter = searchForMaxIteration(iter_root)
+        iter_path = os.path.join(iter_root, f"iteration_{max_iter}", "point_cloud.ply")
+        if os.path.exists(iter_path):
+            return iter_path
+
+    raise FileNotFoundError(
+        f"N3DV PLY not found for frame {frame_id} under {base_path}. "
+        f"Tried {canonical_path} and iteration paths under {iter_root}"
+    )
 
 
 def render_and_evaluate(gaussians, cameras, background, pipeline, psnr_metric, ssim_metric, save=False):
@@ -178,6 +288,10 @@ def evaluate_decompression_quality(args):
         print("Error: --output_render_path is required when --save_renders is set")
         sys.exit(1)
 
+    if args.dataset_type == "n3dv" and not args.n3dv_model_path:
+        print("Error: --n3dv_model_path is required when --dataset_type is n3dv")
+        sys.exit(1)
+
     # --- Setup ---
     pipeline = PipelineParams(argparse.ArgumentParser())
 
@@ -200,9 +314,16 @@ def evaluate_decompression_quality(args):
     # --- Load test cameras ONCE from the first frame ---
     first_frame = frame_list[0]
     print("Loading test cameras from first frame...")
-    cameras, cam_file_paths, cam_resolutions = load_test_cameras(
-        args.dataset_path, first_frame, args.resolution, args.llffhold
-    )
+    cam_file_paths = None
+    cam_indices = None
+    if args.dataset_type == "n3dv":
+        cameras, cam_indices, cam_resolutions = load_n3dv_test_cameras(
+            args.n3dv_model_path, args.dataset_path, first_frame, args.resolution, args.llffhold
+        )
+    else:
+        cameras, cam_file_paths, cam_resolutions = load_test_cameras(
+            args.dataset_path, first_frame, args.resolution, args.llffhold
+        )
 
     n_test_cams = len(cameras)
 
@@ -218,24 +339,31 @@ def evaluate_decompression_quality(args):
     # --- Per-frame evaluation loop ---
     for frame in tqdm(frame_list, desc="Evaluating Frames"):
 
-        # GT PLY
-        ckpt_path = os.path.join(args.gt_ply_path, str(frame), "point_cloud")
-        if not os.path.exists(ckpt_path):
-            raise FileNotFoundError(
-                f"GT checkpoint folder not found for frame {frame}: {ckpt_path}"
-            )
-        max_iter = searchForMaxIteration(ckpt_path)
-        gt_ply_file = os.path.join(ckpt_path, f"iteration_{max_iter}", "point_cloud.ply")
+        if args.dataset_type == "n3dv":
+            gt_ply_file = find_n3dv_ply_path(args.n3dv_model_path, frame)
+            decomp_ply_file = find_n3dv_ply_path(args.decompressed_ply_path, frame)
+        else:
+            # GT PLY
+            ckpt_path = os.path.join(args.gt_ply_path, str(frame), "point_cloud")
+            if not os.path.exists(ckpt_path):
+                raise FileNotFoundError(
+                    f"GT checkpoint folder not found for frame {frame}: {ckpt_path}"
+                )
+            max_iter = searchForMaxIteration(ckpt_path)
+            gt_ply_file = os.path.join(ckpt_path, f"iteration_{max_iter}", "point_cloud.ply")
 
-        # Decompressed PLY
-        decomp_ply_file = os.path.join(args.decompressed_ply_path, str(frame), "point_cloud", "point_cloud.ply")
-        if not os.path.exists(decomp_ply_file):
-            print(f"Warning: Decompressed PLY not found: {decomp_ply_file}, skipping frame {frame}")
-            continue
+            # Decompressed PLY
+            decomp_ply_file = os.path.join(args.decompressed_ply_path, str(frame), "point_cloud", "point_cloud.ply")
+            if not os.path.exists(decomp_ply_file):
+                print(f"Warning: Decompressed PLY not found: {decomp_ply_file}, skipping frame {frame}")
+                continue
 
         # Update GT images for this frame
         t0 = time.time()
-        update_camera_images(cameras, args.dataset_path, frame, cam_file_paths, cam_resolutions)
+        if args.dataset_type == "n3dv":
+            update_n3dv_images(cameras, args.dataset_path, frame, cam_indices, cam_resolutions)
+        else:
+            update_camera_images(cameras, args.dataset_path, frame, cam_file_paths, cam_resolutions)
         t1 = time.time()
 
         # Evaluate GT model
@@ -372,6 +500,10 @@ if __name__ == "__main__":
                         help="Folder containing decompressed PLY files (<frame_id>/point_cloud/point_cloud.ply)")
     parser.add_argument("--dataset_path", type=str, required=True,
                         help="Path to processed dataset (containing frame folders with transforms.json)")
+    parser.add_argument("--dataset_type", type=str, default="hifi4g", choices=["hifi4g", "n3dv"],
+                        help="Dataset type: hifi4g (default) or n3dv")
+    parser.add_argument("--n3dv_model_path", type=str, default=None,
+                        help="N3DV model root path containing cameras.json and frames/ (required for n3dv)")
     parser.add_argument("--sh_degree", type=int, default=3)
     parser.add_argument("--resolution", type=int, default=2,
                         help="Resolution scale used during training (1, 2, 4, 8)")

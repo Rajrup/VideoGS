@@ -3,8 +3,6 @@
 
 This script reads existing experiment artifacts and builds a per-sequence table
 with:
-  - GS-NFS default latency (encode/decode)
-  - Baseline default latency (VideoGS, MesonGS, LTS-Draco)
   - delta-PSNR and compression-diff against GS-NFS matched by anchor PSNR
 
 Matching protocol (per sequence, per baseline):
@@ -91,14 +89,10 @@ class SeqCfg:
 class FrameMetric:
     psnr: float
     size_bytes: float
-    encode_ms: float | None = None
-    decode_ms: float | None = None
 
 
 @dataclass
 class MethodStats:
-    encode_latency: float | None = None
-    decode_latency: float | None = None
     delta_psnr: float | None = None
     compression_diff: float | None = None
 
@@ -321,24 +315,9 @@ def _load_method_frame_data(
         if fid not in psnr_by_frame:
             continue
 
-        enc: float | None = None
-        dec: float | None = None
-        try:
-            enc = float(row["total_encode_ms"])
-            dec = float(row["total_decode_ms"])
-        except (KeyError, TypeError, ValueError):
-            pass
-
-        by_frame[fid] = FrameMetric(psnr=psnr_by_frame[fid], size_bytes=size_bytes, encode_ms=enc, decode_ms=dec)
+        by_frame[fid] = FrameMetric(psnr=psnr_by_frame[fid], size_bytes=size_bytes)
     return by_frame
 
-
-def _avg_latency(frames: dict[int, FrameMetric]) -> tuple[float | None, float | None]:
-    enc_vals = [v.encode_ms for v in frames.values() if v.encode_ms is not None]
-    dec_vals = [v.decode_ms for v in frames.values() if v.decode_ms is not None]
-    enc = sum(enc_vals) / len(enc_vals) if enc_vals else None
-    dec = sum(dec_vals) / len(dec_vals) if dec_vals else None
-    return enc, dec
 
 
 def _load_hull_points(cfg: SeqCfg) -> list[tuple[float, float]]:
@@ -402,50 +381,6 @@ def _find_matched_livogs_exp_dir(cfg: SeqCfg, sweep_row: dict[str, str] | None) 
         label,
     )
 
-
-def _load_livogs_default_latency(cfg: SeqCfg) -> dict[int, FrameMetric]:
-    latency_csv = os.path.join(cfg.model_root, "latency_benchmark", "livogs", "benchmark_livogs.csv")
-    if os.path.isfile(latency_csv):
-        out: dict[int, FrameMetric] = {}
-        for row in _read_csv_rows(latency_csv):
-            try:
-                fid = int(row["frame_id"])
-                out[fid] = FrameMetric(
-                    psnr=0.0,
-                    size_bytes=float(row.get("compressed_size_bytes", 0.0)),
-                    encode_ms=float(row["total_encode_ms"]),
-                    decode_ms=float(row["total_decode_ms"]),
-                )
-            except (KeyError, TypeError, ValueError):
-                continue
-        if out:
-            return out
-
-    sweep_rows = _load_sweep_rows(cfg)
-    default_like = [
-        r
-        for r in sweep_rows
-        if "default" in str(r.get("label", "")).lower() or "klt" in str(r.get("label", "")).lower()
-    ]
-    candidate_rows = default_like if default_like else sweep_rows[:]
-
-    for row in candidate_rows:
-        exp_dir = _find_matched_livogs_exp_dir(cfg, row)
-        if not exp_dir:
-            continue
-        bench_path = os.path.join(exp_dir, "benchmark_livogs.csv")
-        if not os.path.isfile(bench_path):
-            continue
-        frames = _load_method_frame_data(
-            exp_dir,
-            "benchmark_livogs.csv",
-            size_column="compressed_size_bytes",
-            anchor_only=False,
-            anchor_frame=None,
-        )
-        if frames:
-            return frames
-    return {}
 
 
 def _mean(vals: list[float]) -> float | None:
@@ -534,31 +469,20 @@ def _aggregate_rows(dataset: str, rows: list[SequenceRow]) -> SequenceRow:
     return SequenceRow(
         dataset=dataset,
         sequence="Average",
-        gs_nfs=MethodStats(
-            encode_latency=_agg(lambda r: r.gs_nfs.encode_latency),
-            decode_latency=_agg(lambda r: r.gs_nfs.decode_latency),
-        ),
+        gs_nfs=MethodStats(),
         videogs=MethodStats(
-            encode_latency=_agg(lambda r: r.videogs.encode_latency),
-            decode_latency=_agg(lambda r: r.videogs.decode_latency),
             delta_psnr=_agg(lambda r: r.videogs.delta_psnr),
             compression_diff=_agg(lambda r: r.videogs.compression_diff),
         ),
         mesongs=MethodStats(
-            encode_latency=_agg(lambda r: r.mesongs.encode_latency),
-            decode_latency=_agg(lambda r: r.mesongs.decode_latency),
             delta_psnr=_agg(lambda r: r.mesongs.delta_psnr),
             compression_diff=_agg(lambda r: r.mesongs.compression_diff),
         ),
         dracogs=MethodStats(
-            encode_latency=_agg(lambda r: r.dracogs.encode_latency),
-            decode_latency=_agg(lambda r: r.dracogs.decode_latency),
             delta_psnr=_agg(lambda r: r.dracogs.delta_psnr),
             compression_diff=_agg(lambda r: r.dracogs.compression_diff),
         ),
         gpcc=MethodStats(
-            encode_latency=_agg(lambda r: r.gpcc.encode_latency),
-            decode_latency=_agg(lambda r: r.gpcc.decode_latency),
             delta_psnr=_agg(lambda r: r.gpcc.delta_psnr),
             compression_diff=_agg(lambda r: r.gpcc.compression_diff),
         ),
@@ -771,25 +695,14 @@ def _sequence_row(cfg: SeqCfg, log_lines: list[str]) -> SequenceRow:
 
     draco_frames, meson_frames, video_frames, gpcc_frames = _collect_baseline_frames(cfg, log_lines)
 
-    gs_default_frames = _load_livogs_default_latency(cfg)
-    gs_enc, gs_dec = _avg_latency(gs_default_frames)
-    if gs_enc is None or gs_dec is None:
-        _warn(f"{tag}: GS-NFS default latency unavailable", log_lines)
-    else:
-        _info(f"{tag}: GS-NFS default latency frames={sorted(gs_default_frames.keys())}", log_lines)
-
     def _build_baseline_stats(name: str, baseline_frames: dict[int, FrameMetric]) -> MethodStats:
-        b_enc, b_dec = _avg_latency(baseline_frames)
-        if b_enc is None or b_dec is None:
-            _warn(f"{tag}: {name} latency unavailable", log_lines)
-
         if cfg.anchor_frame not in baseline_frames:
             _warn(f"{tag}: {name} missing anchor frame {cfg.anchor_frame}", log_lines)
-            return MethodStats(encode_latency=b_enc, decode_latency=b_dec)
+            return MethodStats()
 
         matched = _load_livogs_matched_frames(cfg, baseline_frames[cfg.anchor_frame].psnr, log_lines)
         if not matched:
-            return MethodStats(encode_latency=b_enc, decode_latency=b_dec)
+            return MethodStats()
 
         delta, comp, common = _compute_delta_and_compression(baseline_frames, matched)
         if not common:
@@ -798,8 +711,6 @@ def _sequence_row(cfg: SeqCfg, log_lines: list[str]) -> SequenceRow:
             _info(f"{tag}: {name} common frames for delta/compression: {common}", log_lines)
 
         return MethodStats(
-            encode_latency=b_enc,
-            decode_latency=b_dec,
             delta_psnr=delta,
             compression_diff=comp,
         )
@@ -807,7 +718,7 @@ def _sequence_row(cfg: SeqCfg, log_lines: list[str]) -> SequenceRow:
     return SequenceRow(
         dataset=cfg.dataset,
         sequence=cfg.sequence,
-        gs_nfs=MethodStats(encode_latency=gs_enc, decode_latency=gs_dec),
+        gs_nfs=MethodStats(),
         videogs=_build_baseline_stats("VideoGS", video_frames),
         mesongs=_build_baseline_stats("MesonGS", meson_frames),
         dracogs=_build_baseline_stats("DracoGS", draco_frames),
