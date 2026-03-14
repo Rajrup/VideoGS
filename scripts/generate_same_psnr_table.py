@@ -62,6 +62,18 @@ N3DV_SEQS = [
 ]
 
 LIVOGS_RD_SUBDIR = "livogs_rd_new"
+GPCC_DEFAULTS_FILE = SCRIPT_DIR / "gpcc_defaults.json"
+
+
+def _load_gpcc_defaults() -> dict[str, dict[str, int]]:
+    if not GPCC_DEFAULTS_FILE.is_file():
+        return {}
+    with open(GPCC_DEFAULTS_FILE, encoding="utf-8") as f:
+        return cast(dict[str, dict[str, int]], json.load(f))
+
+
+def _gpcc_params_tag(params: dict[str, int]) -> str:
+    return f"J{params['voxel_depth']}_rest{params['qp_rest']}_dc{params['qp_dc']}_op{params['qp_opacity']}"
 
 
 @dataclass(frozen=True)
@@ -72,6 +84,7 @@ class SeqCfg:
     anchor_frame: int
     max_candidate_frame: int
     mesongs_tag: str
+    gpcc_tag: str
 
 
 @dataclass
@@ -98,11 +111,14 @@ class SequenceRow:
     videogs: MethodStats
     mesongs: MethodStats
     dracogs: MethodStats
+    gpcc: MethodStats
 
 
 def _build_seq_cfgs() -> list[SeqCfg]:
+    gpcc_defaults = _load_gpcc_defaults()
     cfgs: list[SeqCfg] = []
     for seq in HIFI4G_SEQS:
+        gpcc_params = gpcc_defaults.get(seq, {})
         cfgs.append(
             SeqCfg(
                 dataset="HiFi4G",
@@ -111,9 +127,11 @@ def _build_seq_cfgs() -> list[SeqCfg]:
                 anchor_frame=0,
                 max_candidate_frame=200,
                 mesongs_tag="d12_nb8_nblk57_cb2048",
+                gpcc_tag=_gpcc_params_tag(gpcc_params) if gpcc_params else "",
             )
         )
     for seq in N3DV_SEQS:
+        gpcc_params = gpcc_defaults.get(seq, {})
         cfgs.append(
             SeqCfg(
                 dataset="N3DV",
@@ -122,6 +140,7 @@ def _build_seq_cfgs() -> list[SeqCfg]:
                 anchor_frame=1,
                 max_candidate_frame=300,
                 mesongs_tag="d17_nb8_nblk57_cb2048",
+                gpcc_tag=_gpcc_params_tag(gpcc_params) if gpcc_params else "",
             )
         )
     return cfgs
@@ -278,6 +297,7 @@ def _load_method_frame_data(
     size_column: str,
     anchor_only: bool,
     anchor_frame: int | None,
+    frame_id_column: str = "frame_id",
 ) -> dict[int, FrameMetric]:
     benchmark_path = os.path.join(output_folder, benchmark_csv_name)
     eval_path = os.path.join(output_folder, "evaluation", "evaluation_results.json")
@@ -288,7 +308,7 @@ def _load_method_frame_data(
     by_frame: dict[int, FrameMetric] = {}
     for row in rows:
         try:
-            fid = int(row["frame_id"])
+            fid = int(row[frame_id_column])
             size_bytes = float(row[size_column])
         except (KeyError, TypeError, ValueError):
             continue
@@ -451,10 +471,6 @@ def _compute_delta_and_compression(
     return _mean(delta_samples), _mean(comp_samples), common
 
 
-def _fmt_ms(v: float | None) -> str:
-    return "" if v is None else f"{v:.1f}"
-
-
 def _fmt_db(v: float | None) -> str:
     return "" if v is None else f"{v:.2f}"
 
@@ -467,19 +483,13 @@ def _method_headers() -> list[str]:
     return [
         "",
         "",
-        "GS-NFS",
-        "",
         "V^3-2D",
-        "",
-        "",
         "",
         "MesonGS",
         "",
-        "",
-        "",
         "LTS-Draco",
         "",
-        "",
+        "GPCC",
         "",
     ]
 
@@ -488,20 +498,14 @@ def _metric_headers() -> list[str]:
     return [
         "dataset",
         "sequence",
-        "encode_latency",
-        "decode_latency",
-        "encode_latency",
-        "decode_latency",
         "delta_PSNR",
-        "compression_diff",
-        "encode_latency",
-        "decode_latency",
+        "compression_ratio",
         "delta_PSNR",
-        "compression_diff",
-        "encode_latency",
-        "decode_latency",
+        "compression_ratio",
         "delta_PSNR",
-        "compression_diff",
+        "compression_ratio",
+        "delta_PSNR",
+        "compression_ratio",
     ]
 
 
@@ -509,20 +513,14 @@ def _row_to_list(row: SequenceRow) -> list[str]:
     return [
         row.dataset,
         row.sequence,
-        _fmt_ms(row.gs_nfs.encode_latency),
-        _fmt_ms(row.gs_nfs.decode_latency),
-        _fmt_ms(row.videogs.encode_latency),
-        _fmt_ms(row.videogs.decode_latency),
         _fmt_db(row.videogs.delta_psnr),
         _fmt_ratio(row.videogs.compression_diff),
-        _fmt_ms(row.mesongs.encode_latency),
-        _fmt_ms(row.mesongs.decode_latency),
         _fmt_db(row.mesongs.delta_psnr),
         _fmt_ratio(row.mesongs.compression_diff),
-        _fmt_ms(row.dracogs.encode_latency),
-        _fmt_ms(row.dracogs.decode_latency),
         _fmt_db(row.dracogs.delta_psnr),
         _fmt_ratio(row.dracogs.compression_diff),
+        _fmt_db(row.gpcc.delta_psnr),
+        _fmt_ratio(row.gpcc.compression_diff),
     ]
 
 
@@ -558,6 +556,12 @@ def _aggregate_rows(dataset: str, rows: list[SequenceRow]) -> SequenceRow:
             delta_psnr=_agg(lambda r: r.dracogs.delta_psnr),
             compression_diff=_agg(lambda r: r.dracogs.compression_diff),
         ),
+        gpcc=MethodStats(
+            encode_latency=_agg(lambda r: r.gpcc.encode_latency),
+            decode_latency=_agg(lambda r: r.gpcc.decode_latency),
+            delta_psnr=_agg(lambda r: r.gpcc.delta_psnr),
+            compression_diff=_agg(lambda r: r.gpcc.compression_diff),
+        ),
     )
 
 
@@ -572,48 +576,58 @@ def _write_csv(rows: list[SequenceRow], path: Path) -> None:
     print(f"  Wrote CSV: {path}")
 
 
+def _tex_seq_name(dataset: str, sequence: str) -> str:
+    if sequence == "Average":
+        return "Mean"
+    if dataset == "HiFi4G":
+        # "4K_Actor1_Greeting" → "Actor1"
+        parts = sequence.split("_")
+        if len(parts) >= 2 and parts[1].startswith("Actor"):
+            return parts[1]
+        return sequence.replace("_", "\\_")
+    # N3DV: escape underscores, drop trailing "_1" (e.g. flame_salmon_1)
+    name = sequence
+    if name.endswith("_1"):
+        name = name[:-2]
+    return name.replace("_", "\\_")
+
+
 def _write_tex(rows: list[SequenceRow], path: Path) -> None:
     os.makedirs(path.parent, exist_ok=True)
     lines: list[str] = []
-    lines.append("\\begin{tabular}{llcccccccccccccc}")
+    lines.append("\\begin{tabular}{llccccccc}")
     lines.append("\\toprule")
     lines.append(
-        "Dataset & Sequence "
-        + "& \\multicolumn{2}{c}{GS-NFS} "
-        + "& \\multicolumn{4}{c}{V^3-2D} "
-        + "& \\multicolumn{4}{c}{MesonGS} "
-        + "& \\multicolumn{4}{c}{LTS-Draco} \\\\" 
+        "Sequence & \\multicolumn{2}{c}{\\vthree{}-2D} "
+        "& \\multicolumn{2}{c}{MesonGS} "
+        "& \\multicolumn{2}{c}{LTS-Draco} "
+        "& \\multicolumn{2}{c}{GPCC} \\\\"
     )
     lines.append(
-        "& "
-        + "& Enc (ms) & Dec (ms) "
-        + "& Enc (ms) & Dec (ms) & $\\Delta$PSNR (dB) & Comp. Diff "
-        + "& Enc (ms) & Dec (ms) & $\\Delta$PSNR (dB) & Comp. Diff "
-        + "& Enc (ms) & Dec (ms) & $\\Delta$PSNR (dB) & Comp. Diff \\\\" 
+        "         & \\dpsnr{} (dB) & \\rcr{} "
+        "& \\dpsnr{} (dB) & \\rcr{} "
+        "& \\dpsnr{} (dB) & \\rcr{} "
+        "& \\dpsnr{} (dB) & \\rcr{} \\\\"
     )
     lines.append("\\midrule")
 
     for i, row in enumerate(rows):
         if i > 0 and row.dataset == "N3DV" and rows[i - 1].dataset == "HiFi4G":
             lines.append("\\midrule")
-        vals = _row_to_list(row)
+        if row.sequence == "Average":
+            lines.append("\\hline")
+
+        seq_name = _tex_seq_name(row.dataset, row.sequence)
         cells = [
-            vals[0],
-            vals[1],
-            vals[2],
-            vals[3],
-            vals[4],
-            vals[5],
-            vals[6],
-            vals[7],
-            vals[8],
-            vals[9],
-            vals[10],
-            vals[11],
-            vals[12],
-            vals[13],
-            vals[14],
-            vals[15],
+            seq_name,
+            _fmt_db(row.videogs.delta_psnr),
+            _fmt_ratio(row.videogs.compression_diff),
+            _fmt_db(row.mesongs.delta_psnr),
+            _fmt_ratio(row.mesongs.compression_diff),
+            _fmt_db(row.dracogs.delta_psnr),
+            _fmt_ratio(row.dracogs.compression_diff),
+            _fmt_db(row.gpcc.delta_psnr),
+            _fmt_ratio(row.gpcc.compression_diff),
         ]
         lines.append(" & ".join(cells) + " \\\\")
 
@@ -670,10 +684,12 @@ def _collect_baseline_frames(cfg: SeqCfg, log_lines: list[str]) -> tuple[
     dict[int, FrameMetric],
     dict[int, FrameMetric],
     dict[int, FrameMetric],
+    dict[int, FrameMetric],
 ]:
     draco_frames: dict[int, FrameMetric] = {}
     meson_frames: dict[int, FrameMetric] = {}
     video_frames: dict[int, FrameMetric] = {}
+    gpcc_frames: dict[int, FrameMetric] = {}
 
     draco_ids, draco_dirs = _discover_frame_dirs(cfg, "dracogs", "eg_16_eo_16_et_16_es_16_cl_10", "frame")
     _info(f"{cfg.dataset}/{cfg.sequence} DracoGS frames found: {draco_ids}", log_lines)
@@ -702,7 +718,20 @@ def _collect_baseline_frames(cfg: SeqCfg, log_lines: list[str]) -> tuple[
         if anchor in d:
             video_frames[anchor] = d[anchor]
 
-    return draco_frames, meson_frames, video_frames
+    if cfg.gpcc_tag:
+        gpcc_ids, gpcc_dirs = _discover_frame_dirs(cfg, "gpcc", cfg.gpcc_tag, "frame")
+        _info(f"{cfg.dataset}/{cfg.sequence} GPCC frames found: {gpcc_ids}", log_lines)
+        for fid, folder in gpcc_dirs.items():
+            d = _load_method_frame_data(
+                folder, "benchmark_gpcc.csv", "total_compressed_bytes", False, None,
+                frame_id_column="frame_idx",
+            )
+            if fid in d:
+                gpcc_frames[fid] = d[fid]
+    else:
+        _warn(f"{cfg.dataset}/{cfg.sequence} GPCC defaults not available", log_lines)
+
+    return draco_frames, meson_frames, video_frames, gpcc_frames
 
 
 def _load_livogs_matched_frames(cfg: SeqCfg, target_psnr: float, log_lines: list[str]) -> dict[int, FrameMetric]:
@@ -740,7 +769,7 @@ def _sequence_row(cfg: SeqCfg, log_lines: list[str]) -> SequenceRow:
     tag = f"{cfg.dataset}/{cfg.sequence}"
     print(f"\n{'=' * 70}\nProcessing {tag}\n{'=' * 70}")
 
-    draco_frames, meson_frames, video_frames = _collect_baseline_frames(cfg, log_lines)
+    draco_frames, meson_frames, video_frames, gpcc_frames = _collect_baseline_frames(cfg, log_lines)
 
     gs_default_frames = _load_livogs_default_latency(cfg)
     gs_enc, gs_dec = _avg_latency(gs_default_frames)
@@ -782,6 +811,7 @@ def _sequence_row(cfg: SeqCfg, log_lines: list[str]) -> SequenceRow:
         videogs=_build_baseline_stats("VideoGS", video_frames),
         mesongs=_build_baseline_stats("MesonGS", meson_frames),
         dracogs=_build_baseline_stats("DracoGS", draco_frames),
+        gpcc=_build_baseline_stats("GPCC", gpcc_frames),
     )
 
 

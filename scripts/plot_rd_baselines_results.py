@@ -6,6 +6,7 @@ from __future__ import annotations
 import csv
 import glob
 import json
+import math
 import os
 import re
 import sys
@@ -38,7 +39,7 @@ PLOT_OUTPUT_DIR = str(DEFAULT_PLOTS_DIR)
 PLOT_DATASETS: list[str] | None = None
 PLOT_SEQUENCES: list[str] | None = []
 PLOT_VIDEOGS_GROUP_SIZES: list[int] | None = [20]
-PLOT_FORCE_RECOLLECT = False
+PLOT_FORCE_RECOLLECT = True
 
 # -- Per-sequence DracoGS sweep overrides -----------------------------------
 DRACOGS_SWEEP_OVERRIDES: dict[str, dict[str, Any]] = {
@@ -139,7 +140,9 @@ def read_rows(csv_path: str) -> list[dict[str, Any]]:
             parsed: dict[str, Any] = dict(row)
             parsed["compressed_mb"] = _to_float(row.get("compressed_mb"))
             parsed["decomp_psnr"] = _to_float(row.get("decomp_psnr"))
+            parsed["decomp_ssim"] = _to_float(row.get("decomp_ssim"))
             parsed["gt_psnr"] = _to_float(row.get("gt_psnr"))
+            parsed["gt_ssim"] = _to_float(row.get("gt_ssim"))
             parsed["frame_id"] = int(row.get("frame_id", "0"))
             raw_group_size = row.get("group_size")
             if raw_group_size in (None, ""):
@@ -162,6 +165,33 @@ def pareto_frontier(points: list[tuple[float, float]]) -> list[tuple[float, floa
         if point[1] > frontier[-1][1]:
             frontier.append(point)
     return frontier
+
+
+def convex_hull_upper(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Upper convex hull (concave envelope) for rate-distortion points.
+
+    First reduces to the Pareto frontier (non-dominated, monotonically
+    increasing), then removes interior points whose quality falls below
+    the line connecting their neighbours — keeping only the operating
+    points where no convex combination of two others achieves better
+    quality at the same rate.
+    """
+    frontier = pareto_frontier(points)
+    if len(frontier) <= 2:
+        return frontier
+    hull: list[tuple[float, float]] = []
+    for p in frontier:
+        while len(hull) >= 2:
+            o, a = hull[-2], hull[-1]
+            # >= 0 means left turn / collinear: middle point is on or
+            # below the line from o to p, so drop it.
+            cross = (a[0] - o[0]) * (p[1] - o[1]) - (a[1] - o[1]) * (p[0] - o[0])
+            if cross >= 0:
+                hull.pop()
+            else:
+                break
+        hull.append(p)
+    return hull
 
 
 def _find_livogs_hull_csv(dataset: str, sequence: str, frame_id: int) -> str | None:
@@ -231,12 +261,15 @@ def _find_livogs_hull_csv(dataset: str, sequence: str, frame_id: int) -> str | N
     return None
 
 
-def _load_livogs_hull_points(csv_path: str) -> list[tuple[float, float]]:
+def _load_livogs_hull_points(
+    csv_path: str,
+    metric_col: str = "decomp_psnr",
+) -> list[tuple[float, float]]:
     points: list[tuple[float, float]] = []
     with open(csv_path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             try:
-                points.append((float(row["compressed_mb"]), float(row["decomp_psnr"])))
+                points.append((float(row["compressed_mb"]), float(row[metric_col])))
             except (KeyError, ValueError):
                 continue
     points.sort(key=lambda p: p[0])
@@ -549,6 +582,22 @@ def _collect_gpcc_rows(runner: Any, cfg: Any, sequence: str) -> list[dict[str, A
     return rows
 
 
+_METRIC_INFO: dict[str, dict[str, str]] = {
+    "psnr": {
+        "decomp_col": "decomp_psnr",
+        "gt_col": "gt_psnr",
+        "label": "PSNR (dB)",
+        "gt_fmt": "GT ({value:.2f} dB)",
+    },
+    "ssim": {
+        "decomp_col": "decomp_ssim",
+        "gt_col": "gt_ssim",
+        "label": "SSIM",
+        "gt_fmt": "GT ({value:.4f})",
+    },
+}
+
+
 def _render_rd_plot(
     dataset: str,
     sequence: str,
@@ -556,12 +605,24 @@ def _render_rd_plot(
     rows: list[dict[str, Any]],
     *,
     frontier_only: bool = False,
+    metric: str = "psnr",
 ) -> mfigure.Figure:
+    minfo = _METRIC_INFO[metric]
+    decomp_col = minfo["decomp_col"]
+    gt_col = minfo["gt_col"]
+    y_label = minfo["label"]
+    gt_fmt = minfo["gt_fmt"]
+
     fig, ax = plt.subplots(figsize=(10, 7))
 
     by_baseline: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         by_baseline[str(row.get("baseline", ""))].append(row)
+
+    gt_candidates = [float(r[gt_col]) for r in rows if r.get(gt_col) is not None]
+    gt_val = gt_candidates[0] if gt_candidates else None
+    gpcc_max_x: float | None = None
+    all_max_x: float | None = None
 
     for baseline in RD_BASELINES:
         style = RD_BASELINES_STYLES[baseline]
@@ -571,10 +632,18 @@ def _render_rd_plot(
             hull_csv = _find_livogs_hull_csv(dataset, sequence, frame_id)
             if hull_csv is None:
                 continue
-            hull_pts = _load_livogs_hull_points(hull_csv)
+            hull_pts = _load_livogs_hull_points(hull_csv, metric_col=decomp_col)
+            if not hull_pts:
+                continue
+            if frontier_only and gt_val is not None:
+                hull_pts = [(x, y) for x, y in hull_pts if y <= gt_val]
             if not hull_pts:
                 continue
             hx, hy = zip(*hull_pts)
+            if frontier_only:
+                livogs_max = max(hx)
+                if all_max_x is None or livogs_max > all_max_x:
+                    all_max_x = livogs_max
             display_name = BASELINE_DISPLAY_NAMES.get("LivoGS", "LivoGS")
             label = display_name if frontier_only else f"{display_name} ({len(hull_pts)} pts)"
             ax.scatter(
@@ -599,12 +668,27 @@ def _render_rd_plot(
 
         if not baseline_rows:
             continue
+        if frontier_only:
+            all_xs = [float(r["compressed_mb"]) for r in baseline_rows if r.get("compressed_mb") is not None]
+            if all_xs:
+                cur_max = max(all_xs)
+                if baseline == "GPCC":
+                    gpcc_max_x = cur_max
+                if all_max_x is None or cur_max > all_max_x:
+                    all_max_x = cur_max
+        if frontier_only and gt_val is not None:
+            baseline_rows = [
+                r for r in baseline_rows
+                if r.get(decomp_col) is not None and float(r[decomp_col]) <= gt_val
+            ]
+            if not baseline_rows:
+                continue
         xs = [float(r["compressed_mb"]) for r in baseline_rows if r.get("compressed_mb") is not None]
-        ys = [float(r["decomp_psnr"]) for r in baseline_rows if r.get("decomp_psnr") is not None]
+        ys = [float(r[decomp_col]) for r in baseline_rows if r.get(decomp_col) is not None]
         if not xs or not ys:
             continue
 
-        frontier = pareto_frontier(list(zip(xs, ys)))
+        frontier = convex_hull_upper(list(zip(xs, ys)))
         display_name = BASELINE_DISPLAY_NAMES.get(baseline, baseline)
 
         if frontier_only:
@@ -639,32 +723,38 @@ def _render_rd_plot(
                 zorder=4,
             )
 
-    gt_candidates = [float(r["gt_psnr"]) for r in rows if r.get("gt_psnr") is not None]
-    if gt_candidates:
-        gt = gt_candidates[0]
+    if gt_val is not None:
         ax.axhline(
-            gt,
+            gt_val,
             color="black",
             linestyle="--",
             linewidth=1.2,
-            label=f"GT ({gt:.2f} dB)",
+            label=gt_fmt.format(value=gt_val),
             zorder=1,
         )
 
     if frontier_only:
+        xlim_x = gpcc_max_x if gpcc_max_x is not None else all_max_x
+        if xlim_x is not None:
+            ax.set_xlim(left=0, right=math.ceil(xlim_x))
         ax.set_xlabel("Compressed Size (MB)", fontsize=20)
-        ax.set_ylabel("PSNR (dB)", fontsize=20)
+        ax.set_ylabel(y_label, fontsize=20)
         ax.tick_params(axis="both", labelsize=20)
         ax.grid(True, alpha=0.3)
         ax.legend(loc="lower right", fontsize=20, markerscale=2)
     else:
         ax.set_xlabel("Compressed Size (MB)")
-        ax.set_ylabel("PSNR (dB)")
-        ax.set_title(f"R-D Curve | {dataset} | {sequence} | Frame {frame_id}")
+        ax.set_ylabel(y_label)
+        ax.set_title(f"R-D Curve ({y_label}) | {dataset} | {sequence} | Frame {frame_id}")
         ax.grid(True, alpha=0.3)
         ax.legend(loc="lower right", fontsize=9, markerscale=2)
     fig.tight_layout()
     return fig
+
+
+def _has_metric_data(rows: list[dict[str, Any]], metric: str) -> bool:
+    decomp_col = _METRIC_INFO[metric]["decomp_col"]
+    return any(r.get(decomp_col) is not None for r in rows)
 
 
 def plot_group(
@@ -676,19 +766,24 @@ def plot_group(
 ) -> None:
     dataset_dir = os.path.join(output_root, dataset)
     os.makedirs(dataset_dir, exist_ok=True)
-    stem = f"rd_baselines_curve_{sequence}_frame{frame_id}"
 
-    fig_png = _render_rd_plot(dataset, sequence, frame_id, rows, frontier_only=False)
-    out_png = os.path.join(dataset_dir, f"{stem}.png")
-    fig_png.savefig(out_png, dpi=150)
-    plt.close(fig_png)
-    print(f"Saved: {out_png}")
+    for metric in _METRIC_INFO:
+        if not _has_metric_data(rows, metric):
+            continue
 
-    fig_pdf = _render_rd_plot(dataset, sequence, frame_id, rows, frontier_only=True)
-    out_pdf = os.path.join(dataset_dir, f"{stem}.pdf")
-    fig_pdf.savefig(out_pdf)
-    plt.close(fig_pdf)
-    print(f"Saved: {out_pdf}")
+        stem = f"rd_baselines_curve_{sequence}_frame{frame_id}_{metric}"
+
+        fig_png = _render_rd_plot(dataset, sequence, frame_id, rows, frontier_only=False, metric=metric)
+        out_png = os.path.join(dataset_dir, f"{stem}.png")
+        fig_png.savefig(out_png, dpi=150)
+        plt.close(fig_png)
+        print(f"Saved: {out_png}")
+
+        fig_pdf = _render_rd_plot(dataset, sequence, frame_id, rows, frontier_only=True, metric=metric)
+        out_pdf = os.path.join(dataset_dir, f"{stem}.pdf")
+        fig_pdf.savefig(out_pdf)
+        plt.close(fig_pdf)
+        print(f"Saved: {out_pdf}")
 
 
 @contextmanager

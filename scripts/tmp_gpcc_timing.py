@@ -17,7 +17,6 @@ Usage (videogs conda env with LiVoGS CUDA modules):
 from __future__ import annotations
 
 import concurrent.futures
-import csv
 import json
 import os
 import shutil
@@ -59,33 +58,9 @@ except ImportError:
 
 HIFI4G_DATA_PATH = "/synology/rajrup/VideoGS"
 N3DV_DATA_PATH = "/synology/rajrup/Queen"
-VIDEOGS_GROUP_SIZE = 20
-
 TMC3_PATH = "/home/haodongw/workspace/mpeg-pcc-tmc13/build/tmc3/tmc3"
 
-GPCC_QP_COMBOS: list[tuple[int, int, int]] = [
-    # (qp_rest, qp_dc, qp_opacity)
-    (40, 4, 16), (40, 4, 34), (40, 4, 40),
-    (40, 16, 16), (40, 16, 34), (40, 16, 40),
-    (40, 20, 16), (40, 20, 34), (40, 20, 40),
-    (40, 24, 16), (40, 24, 34), (40, 24, 40),
-    (40, 28, 16), (40, 28, 34), (40, 28, 40),
-    (38, 4, 4), (38, 16, 4),
-    (34, 4, 4), (34, 16, 4),
-    (31, 4, 4), (31, 16, 4),
-    (28, 4, 4), (28, 16, 4),
-    (38, 4, 16), (38, 16, 16),
-    (34, 4, 16), (34, 16, 16),
-    (31, 4, 16), (31, 16, 16),
-    (28, 4, 16), (28, 16, 16),
-    (38, 4, 28), (38, 16, 28),
-    (34, 4, 28), (34, 16, 28),
-    (31, 4, 28), (31, 16, 28),
-    (28, 4, 28), (28, 16, 28),
-    (16, 4, 4), (16, 16, 4),
-    (4, 4, 4), (4, 16, 4),
-    (16, 4, 16), (4, 4, 16),
-]
+GPCC_DEFAULTS_JSON = os.path.join(SCRIPT_DIR, "gpcc_defaults.json")
 
 
 @dataclass
@@ -95,133 +70,35 @@ class SeqConfig:
     model_root: str
     input_dir: str
     frame_ids: tuple[int, ...]
-    gpcc_octree_depths: tuple[int, ...]
 
 
-SEQUENCES: list[SeqConfig] = [
-    SeqConfig(
-        name="4K_Actor1_Greeting",
-        dataset="HiFi4G",
-        model_root=f"{HIFI4G_DATA_PATH}/train_output/HiFi4G_Dataset/4K_Actor1_Greeting",
-        input_dir=f"{HIFI4G_DATA_PATH}/train_output/HiFi4G_Dataset/4K_Actor1_Greeting/checkpoint",
-        frame_ids=(0,),
-        gpcc_octree_depths=(12),
-    ),
-    SeqConfig(
-        name="flame_salmon_1",
-        dataset="N3DV",
-        model_root=f"{N3DV_DATA_PATH}/pretrained_output/Neural_3D_Video/queen_compressed_flame_salmon_1",
-        input_dir=f"{N3DV_DATA_PATH}/pretrained_output/Neural_3D_Video/queen_compressed_flame_salmon_1",
-        frame_ids=(1,),
-        gpcc_octree_depths=(17),
-    ),
-    SeqConfig(
-        name="sear_steak",
-        dataset="N3DV",
-        model_root=f"{N3DV_DATA_PATH}/pretrained_output/Neural_3D_Video/queen_compressed_sear_steak",
-        input_dir=f"{N3DV_DATA_PATH}/pretrained_output/Neural_3D_Video/queen_compressed_sear_steak",
-        frame_ids=(1,),
-        gpcc_octree_depths=(17),
-    ),
-]
+def _build_sequences(defaults: dict[str, Any]) -> list[SeqConfig]:
+    sequences: list[SeqConfig] = []
+    for name in defaults:
+        if name.startswith("4K_"):
+            model_root = f"{HIFI4G_DATA_PATH}/train_output/HiFi4G_Dataset/{name}"
+            sequences.append(SeqConfig(
+                name=name,
+                dataset="HiFi4G",
+                model_root=model_root,
+                input_dir=f"{model_root}/checkpoint",
+                frame_ids=(0,),
+            ))
+        else:
+            model_root = f"{N3DV_DATA_PATH}/pretrained_output/Neural_3D_Video/queen_compressed_{name}"
+            sequences.append(SeqConfig(
+                name=name,
+                dataset="N3DV",
+                model_root=model_root,
+                input_dir=model_root,
+                frame_ids=(1,),
+            ))
+    return sequences
 
 
 def _cuda_sync() -> None:
     if torch is not None and torch.cuda.is_available():
         torch.cuda.synchronize()
-
-
-def load_videogs_target_psnr(model_root: str, frame_id: int) -> float | None:
-    """Load VideoGS (qp=25) decomp_psnr — used as the GPCC matching target."""
-    group_tag = f"frames_{frame_id}_{frame_id + VIDEOGS_GROUP_SIZE - 1}_int_1"
-    eval_path = os.path.join(
-        model_root, "compression", "videogs", "qp_25", group_tag,
-        "evaluation", "evaluation_results.json",
-    )
-    if not os.path.isfile(eval_path):
-        return None
-    try:
-        with open(eval_path, encoding="utf-8") as f:
-            data = json.load(f)
-        for fr in data.get("per_frame", []):
-            if int(fr["frame"]) == frame_id:
-                return float(fr["decomp_psnr"])
-    except (OSError, json.JSONDecodeError, KeyError, ValueError):
-        pass
-    return None
-
-
-def select_gpcc_pareto_config(
-    model_root: str,
-    frame_id: int,
-    depths: tuple[int, ...],
-    target_psnr: float,
-) -> dict[str, Any] | None:
-    """Replicate _load_gpcc_entry Pareto-frontier selection."""
-    gpcc_root = os.path.join(model_root, "compression", "gpcc")
-    candidates: list[dict[str, Any]] = []
-
-    for depth in depths:
-        for qp_rest, qp_dc, qp_opacity in GPCC_QP_COMBOS:
-            params_tag = f"J{depth}_rest{qp_rest}_dc{qp_dc}_op{qp_opacity}"
-            out_dir = os.path.join(gpcc_root, params_tag, f"frame{frame_id}")
-
-            bench_path = os.path.join(out_dir, "benchmark_gpcc.csv")
-            eval_path = os.path.join(out_dir, "evaluation", "evaluation_results.json")
-            if not os.path.isfile(bench_path) or not os.path.isfile(eval_path):
-                continue
-
-            try:
-                bench_data: dict[str, Any] | None = None
-                with open(bench_path, newline="", encoding="utf-8") as f:
-                    for row in csv.DictReader(f):
-                        if int(row["frame_idx"]) == frame_id:
-                            bench_data = {
-                                "encode_ms": float(row["encode_time_s"]) * 1000,
-                                "decode_ms": float(row["decode_time_s"]) * 1000,
-                                "compressed_bytes": int(row["total_compressed_bytes"]),
-                            }
-                            break
-                if bench_data is None:
-                    continue
-
-                metrics: dict[str, float] | None = None
-                with open(eval_path, encoding="utf-8") as f:
-                    eval_data = json.load(f)
-                for fr in eval_data.get("per_frame", []):
-                    if int(fr["frame"]) == frame_id:
-                        metrics = {
-                            "decomp_psnr": float(fr["decomp_psnr"]),
-                            "gt_psnr": float(fr["gt_psnr"]),
-                        }
-                        break
-                if metrics is None:
-                    continue
-
-                candidates.append({
-                    **bench_data,
-                    "decomp_psnr": metrics["decomp_psnr"],
-                    "gt_psnr": metrics["gt_psnr"],
-                    "depth": depth,
-                    "qp_rest": qp_rest,
-                    "qp_dc": qp_dc,
-                    "qp_opacity": qp_opacity,
-                })
-            except (OSError, KeyError, ValueError):
-                continue
-
-    if not candidates:
-        return None
-
-    # Pareto frontier: sorted by size, keep only points with increasing PSNR
-    candidates.sort(key=lambda c: c["compressed_bytes"])
-    frontier: list[dict[str, Any]] = [candidates[0]]
-    for c in candidates[1:]:
-        if c["decomp_psnr"] > frontier[-1]["decomp_psnr"]:
-            frontier.append(c)
-
-    # Pick the frontier point closest to the target PSNR
-    return min(frontier, key=lambda c: abs(c["decomp_psnr"] - target_psnr))
 
 
 def gpu_warmup(ply_path: str) -> dict[str, Any]:
@@ -512,12 +389,20 @@ def main() -> None:
     print(sep)
     print("GPCC Baseline  --  Encoding / Decoding Time Measurement")
     print("  (file I/O excluded from timing, GPU warmed up)")
-    print(f"  Config selection: Pareto frontier matched to VideoGS (qp=25) PSNR")
+    print(f"  Config source: {GPCC_DEFAULTS_JSON}")
     print(f"  TMC3 path: {TMC3_PATH}")
     print(sep)
 
+    if not os.path.isfile(GPCC_DEFAULTS_JSON):
+        print(f"[ERROR] Defaults JSON not found: {GPCC_DEFAULTS_JSON}")
+        return
+    with open(GPCC_DEFAULTS_JSON, encoding="utf-8") as f:
+        gpcc_defaults: dict[str, dict[str, int]] = json.load(f)
+
+    sequences = _build_sequences(gpcc_defaults)
+
     first_ply_path: str | None = None
-    for seq in SEQUENCES:
+    for seq in sequences:
         for fid in seq.frame_ids:
             resolved = _resolve_input_ply(seq.input_dir, fid)
             if resolved is not None:
@@ -534,48 +419,29 @@ def main() -> None:
 
     results: list[dict[str, Any]] = []
 
-    for seq in SEQUENCES:
+    for seq in sequences:
         print(f"\n{'_' * 60}")
         print(f"Sequence: {seq.name}  ({seq.dataset}),  frames={list(seq.frame_ids)}")
         print(f"  Model root:    {seq.model_root}")
-        print(f"  Octree depths: {seq.gpcc_octree_depths}")
+
+        seq_cfg = gpcc_defaults.get(seq.name)
+        if seq_cfg is None:
+            print(f"  [SKIP] No config for '{seq.name}' in {GPCC_DEFAULTS_JSON}")
+            continue
+
+        depth = seq_cfg["voxel_depth"]
+        qp_rest = seq_cfg["qp_rest"]
+        qp_dc = seq_cfg["qp_dc"]
+        qp_opacity = seq_cfg["qp_opacity"]
+
+        print(f"  Config (from gpcc_defaults.json):")
+        print(f"    depth (J)  = {depth}")
+        print(f"    qp_rest    = {qp_rest}")
+        print(f"    qp_dc      = {qp_dc}")
+        print(f"    qp_opacity = {qp_opacity}")
 
         for frame_id in seq.frame_ids:
             print(f"\n  --- frame {frame_id} ---")
-
-            target_psnr = load_videogs_target_psnr(seq.model_root, frame_id)
-            if target_psnr is None:
-                print("  [ERROR] Could not load VideoGS target PSNR -- skipping")
-                continue
-            print(f"  VideoGS target PSNR: {target_psnr:.2f} dB")
-
-            selected = select_gpcc_pareto_config(
-                seq.model_root, frame_id, seq.gpcc_octree_depths, target_psnr,
-            )
-            if selected is None:
-                print("  [ERROR] No valid GPCC candidates found -- skipping")
-                continue
-
-            depth = selected["depth"]
-            qp_rest = selected["qp_rest"]
-            qp_dc = selected["qp_dc"]
-            qp_opacity = selected["qp_opacity"]
-
-            print(f"  Selected config (Pareto-matched to VideoGS PSNR):")
-            print(f"    depth (J)  = {depth}")
-            print(f"    qp_rest    = {qp_rest}")
-            print(f"    qp_dc      = {qp_dc}")
-            print(f"    qp_opacity = {qp_opacity}")
-            print(
-                f"    -> PSNR = {selected['decomp_psnr']:.2f} dB,  "
-                f"size = {selected['compressed_bytes']} B "
-                f"({selected['compressed_bytes'] / (1024 * 1024):.2f} MB)"
-            )
-            print(
-                f"    -> Previous timing (from CSV): "
-                f"enc = {selected['encode_ms']:.1f} ms,  "
-                f"dec = {selected['decode_ms']:.1f} ms"
-            )
 
             ply_path = _resolve_input_ply(seq.input_dir, frame_id)
             if ply_path is None:
@@ -640,7 +506,6 @@ def main() -> None:
                     "encode_s": encode_s,
                     "decode_s": decode_s,
                     "compressed_bytes": comp_bytes,
-                    "decomp_psnr": selected["decomp_psnr"],
                 })
 
             except Exception as exc:
@@ -659,7 +524,7 @@ def main() -> None:
     header = (
         f"{'Sequence':<28s} {'Frame':>5s} {'Depth':>5s} {'qp_rest':>7s} {'qp_dc':>5s} "
         f"{'qp_op':>5s} {'Enc(ms)':>9s} {'Dec(ms)':>9s} "
-        f"{'Size(MB)':>9s} {'PSNR':>7s}"
+        f"{'Size(MB)':>9s}"
     )
     print(header)
     print("-" * len(header))
@@ -669,14 +534,23 @@ def main() -> None:
             f"{r['frame_id']:>5d} "
             f"{r['depth']:>5d} {r['qp_rest']:>7d} {r['qp_dc']:>5d} {r['qp_opacity']:>5d} "
             f"{r['encode_s'] * 1000:>9.1f} {r['decode_s'] * 1000:>9.1f} "
-            f"{r['compressed_bytes'] / (1024 * 1024):>9.2f} "
-            f"{r['decomp_psnr']:>7.2f}"
+            f"{r['compressed_bytes'] / (1024 * 1024):>9.2f}"
         )
 
     avg_enc = sum(r["encode_s"] for r in results) / len(results)
     avg_dec = sum(r["decode_s"] for r in results) / len(results)
-    print(f"\nAverage encode: {avg_enc * 1000:.1f} ms")
-    print(f"Average decode: {avg_dec * 1000:.1f} ms")
+    print(f"\nOverall average encode: {avg_enc * 1000:.1f} ms")
+    print(f"Overall average decode: {avg_dec * 1000:.1f} ms")
+
+    datasets: dict[str, list[dict[str, Any]]] = {}
+    for r in results:
+        datasets.setdefault(r["dataset"], []).append(r)
+    print()
+    for ds in sorted(datasets):
+        ds_results = datasets[ds]
+        ds_avg_enc = sum(r["encode_s"] for r in ds_results) / len(ds_results)
+        ds_avg_dec = sum(r["decode_s"] for r in ds_results) / len(ds_results)
+        print(f"  {ds} ({len(ds_results)} seq)  avg encode: {ds_avg_enc * 1000:.1f} ms  |  avg decode: {ds_avg_dec * 1000:.1f} ms")
     print(sep)
 
 

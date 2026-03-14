@@ -91,15 +91,15 @@ GPCC_QP_COMBOS: tuple[tuple[int, int, int], ...] = (  # (qp_rest, qp_dc, qp_opac
 
 
 SEQUENCE_SETTINGS: dict[str, tuple[str, ...]] = {
-    "HiFi4G": (
-        "4K_Actor1_Greeting",
-        "4K_Actor2_Dancing",
-        "4K_Actor3_Violin",
-        "4K_Actor4_Dancing",
-        "4K_Actor5_Oil-paper_Umbrella",
-        "4K_Actor6_Changing_Clothes",
-        "4K_Actor7_Nunchaku",
-    ),
+    # "HiFi4G": (
+    #     "4K_Actor1_Greeting",
+    #     "4K_Actor2_Dancing",
+    #     "4K_Actor3_Violin",
+    #     "4K_Actor4_Dancing",
+    #     "4K_Actor5_Oil-paper_Umbrella",
+    #     "4K_Actor6_Changing_Clothes",
+    #     "4K_Actor7_Nunchaku",
+    # ),
     "N3DV": (
         "cook_spinach",
         "coffee_martini",
