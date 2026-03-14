@@ -315,6 +315,9 @@ def main():
 
     os.makedirs(args.output_folder, exist_ok=True)
 
+    NUM_WARMUP = 3
+    NUM_TIMING_ITERS = 5
+
     print("=" * 70)
     print("KLT Color Space Ablation Study")
     print("=" * 70)
@@ -326,32 +329,33 @@ def main():
     print(f"  nvcomp:           {nvcomp_algorithm or 'None'}")
     print(f"  Save PLYs:        {args.save_ply}")
     print(f"  Variants:         {VARIANTS}")
+    print(f"  Warmup rounds:    {NUM_WARMUP}")
+    print(f"  Timing iters:     {NUM_TIMING_ITERS} (median)")
     print("=" * 70)
 
-    # --- Warmup GPU ---
-    print("Warming up GPU...")
+    print(f"Warming up GPU ({NUM_WARMUP} rounds)...")
     params0, _ = _load_frame(frames[0])
     if params0 is None:
         raise ValueError(f"PLY not found for warmup frame {frames[0]}")
 
-    for variant in VARIANTS:
-        torch.cuda.synchronize(device_id)
-        cs = encode_livogs(
-            {k: v.clone() for k, v in params0.items()},
-            J=args.J, device=device, device_id=device_id,
-            sh_color_space=variant, quantize_step=quantize_step,
-            rlgr_block_size=args.rlgr_block_size,
-            nvcomp_algorithm=nvcomp_algorithm,
-        )
-        decode_livogs(cs, device=device, device_id=device_id)
-        torch.cuda.synchronize(device_id)
-        print(f"  {variant}: OK")
-        del cs
+    for wi in range(NUM_WARMUP):
+        for variant in VARIANTS:
+            torch.cuda.synchronize(device_id)
+            cs = encode_livogs(
+                {k: v.clone() for k, v in params0.items()},
+                J=args.J, device=device, device_id=device_id,
+                sh_color_space=variant, quantize_step=quantize_step,
+                rlgr_block_size=args.rlgr_block_size,
+                nvcomp_algorithm=nvcomp_algorithm,
+            )
+            decode_livogs(cs, device=device, device_id=device_id)
+            torch.cuda.synchronize(device_id)
+            del cs
+        print(f"  Round {wi + 1}/{NUM_WARMUP}: OK")
     del params0
     torch.cuda.empty_cache()
     print("Warmup done.\n")
 
-    # --- Main benchmark loop ---
     all_rows = []
 
     for frame in tqdm(frames, desc="Frames"):
@@ -363,32 +367,42 @@ def main():
         num_original = params["means"].shape[0]
 
         for variant in VARIANTS:
-            # Clone params -- encode_livogs may modify in-place
-            params_copy = {k: v.clone() for k, v in params.items()}
+            encode_times = []
+            decode_times = []
 
-            torch.cuda.synchronize(device_id)
-            t_enc_start = time.perf_counter()
-            compressed_state = encode_livogs(
-                params_copy, J=args.J, device=device, device_id=device_id,
-                sh_color_space=variant, quantize_step=quantize_step,
-                rlgr_block_size=args.rlgr_block_size,
-                nvcomp_algorithm=nvcomp_algorithm,
-            )
-            torch.cuda.synchronize(device_id)
-            encode_time_ms = (time.perf_counter() - t_enc_start) * 1000
+            for _ti in range(NUM_TIMING_ITERS):
+                params_copy = {k: v.clone() for k, v in params.items()}
+
+                torch.cuda.synchronize(device_id)
+                t_enc_start = time.perf_counter()
+                compressed_state = encode_livogs(
+                    params_copy, J=args.J, device=device, device_id=device_id,
+                    sh_color_space=variant, quantize_step=quantize_step,
+                    rlgr_block_size=args.rlgr_block_size,
+                    nvcomp_algorithm=nvcomp_algorithm,
+                )
+                torch.cuda.synchronize(device_id)
+                encode_times.append((time.perf_counter() - t_enc_start) * 1000)
+
+                t_dec_start = time.perf_counter()
+                decoded_params = decode_livogs(
+                    compressed_state, device=device, device_id=device_id,
+                )
+                torch.cuda.synchronize(device_id)
+                decode_times.append((time.perf_counter() - t_dec_start) * 1000)
+
+                if _ti < NUM_TIMING_ITERS - 1:
+                    del compressed_state, decoded_params, params_copy
+                    torch.cuda.empty_cache()
+
+            encode_time_ms = float(np.median(encode_times))
+            decode_time_ms = float(np.median(decode_times))
 
             nvox = compressed_state["Nvox"]
             compressed_size_bytes = compressed_state["total_compressed_bytes"]
             position_compressed_bytes = compressed_state["position_compressed_bytes"]
             attribute_compressed_bytes = compressed_state["attribute_compressed_bytes"]
             per_channel_compressed_bytes = compressed_state["per_channel_compressed_bytes"]
-
-            t_dec_start = time.perf_counter()
-            decoded_params = decode_livogs(
-                compressed_state, device=device, device_id=device_id,
-            )
-            torch.cuda.synchronize(device_id)
-            decode_time_ms = (time.perf_counter() - t_dec_start) * 1000
 
             _save_decoded(decoded_params, variant, frame)
 

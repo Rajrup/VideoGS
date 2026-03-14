@@ -111,7 +111,7 @@ def main():
     parser.add_argument("--title", type=str, default=None,
                         help="Plot suptitle (default: derived from ply_path)")
     parser.add_argument("--output_dir", type=str, default="results/sh_correlation",
-                        help="Directory for output PNG")
+                        help="Directory for output PDF")
     parser.add_argument("--dpi", type=int, default=150)
     args = parser.parse_args()
 
@@ -222,7 +222,7 @@ def main():
     ax_rgb.imshow(corr_rgb, vmin=-1.0, vmax=1.0, cmap=cmap,
                   interpolation="nearest", aspect="equal")
     ax_rgb.set_title(f"SH Channel Correlation — RGB\n{title}  ({subtitle})",
-                     fontsize=13, fontweight="bold", pad=18)
+                     fontsize=15, fontweight="bold", pad=18)
 
     for bnd in rgb_boundaries[1:]:
         ax_rgb.axhline(bnd - 0.5, color="black", linewidth=1.4, alpha=0.6)
@@ -230,9 +230,9 @@ def main():
 
     tick_pos = [i * 3 + 1 for i in range(num_basis)]
     ax_rgb.set_xticks(tick_pos)
-    ax_rgb.set_xticklabels(rgb_basis_labels, rotation=55, ha="right", fontsize=7)
+    ax_rgb.set_xticklabels(rgb_basis_labels, rotation=55, ha="right", fontsize=9)
     ax_rgb.set_yticks(tick_pos)
-    ax_rgb.set_yticklabels(rgb_basis_labels, fontsize=7)
+    ax_rgb.set_yticklabels(rgb_basis_labels, fontsize=9)
 
     for b in range(num_basis):
         for c in range(3):
@@ -252,13 +252,13 @@ def main():
                         arrowprops=dict(arrowstyle="-", lw=1.2, color="black"),
                         clip_on=False, annotation_clip=False)
         ax_rgb.text(bracket_x, mid, rgb_degree_labels[i],
-                    ha="center", va="center", fontsize=8.5, fontweight="bold",
+                    ha="center", va="center", fontsize=10, fontweight="bold",
                     rotation=90, clip_on=False)
 
     im_rgb = ax_rgb.images[0]
     fig_rgb.colorbar(im_rgb, ax=ax_rgb, fraction=0.046, pad=0.04, label="Pearson correlation")
 
-    rgb_path = os.path.join(args.output_dir, f"sh_correlation_rgb_{safe_title}_J{J}.png")
+    rgb_path = os.path.join(args.output_dir, f"sh_correlation_rgb_{safe_title}_J{J}.pdf")
     fig_rgb.savefig(rgb_path, dpi=args.dpi, bbox_inches="tight")
     plt.close(fig_rgb)
     print(f"Saved: {rgb_path}")
@@ -270,16 +270,16 @@ def main():
     ax_klt.imshow(corr_klt, vmin=-1.0, vmax=1.0, cmap=cmap,
                   interpolation="nearest", aspect="equal")
     ax_klt.set_title(f"SH Channel Correlation — KLT15\n{title}  ({subtitle})",
-                     fontsize=13, fontweight="bold", pad=18)
+                     fontsize=15, fontweight="bold", pad=18)
 
     for bnd in klt_boundaries[1:-1]:
         ax_klt.axhline(bnd - 0.5, color="black", linewidth=1.4, alpha=0.6)
         ax_klt.axvline(bnd - 0.5, color="black", linewidth=1.4, alpha=0.6)
 
     ax_klt.set_xticks(range(C))
-    ax_klt.set_xticklabels(klt_tick_labels, rotation=55, ha="right", fontsize=6)
+    ax_klt.set_xticklabels(klt_tick_labels, rotation=55, ha="right", fontsize=8)
     ax_klt.set_yticks(range(C))
-    ax_klt.set_yticklabels(klt_tick_labels, fontsize=6)
+    ax_klt.set_yticklabels(klt_tick_labels, fontsize=8)
 
     for i in range(len(klt_boundaries) - 1):
         for ch in range(klt_boundaries[i], klt_boundaries[i + 1]):
@@ -298,13 +298,13 @@ def main():
                         arrowprops=dict(arrowstyle="-", lw=1.2, color="black"),
                         clip_on=False, annotation_clip=False)
         ax_klt.text(bracket_x, mid, klt_band_labels[i],
-                    ha="center", va="center", fontsize=8.5, fontweight="bold",
+                    ha="center", va="center", fontsize=10, fontweight="bold",
                     rotation=90, clip_on=False)
 
     im_klt = ax_klt.images[0]
     fig_klt.colorbar(im_klt, ax=ax_klt, fraction=0.046, pad=0.04, label="Pearson correlation")
 
-    klt_path = os.path.join(args.output_dir, f"sh_correlation_klt15_{safe_title}_J{J}.png")
+    klt_path = os.path.join(args.output_dir, f"sh_correlation_klt15_{safe_title}_J{J}.pdf")
     fig_klt.savefig(klt_path, dpi=args.dpi, bbox_inches="tight")
     plt.close(fig_klt)
     print(f"Saved: {klt_path}")
@@ -315,13 +315,14 @@ def main():
     fig_rc, ax_rc = plt.subplots(figsize=(10, 10))
     ax_rc.imshow(corr_rgb, vmin=-1.0, vmax=1.0, cmap=cmap,
                  interpolation="nearest", aspect="equal")
-    ax_rc.set_title("RGB", fontsize=16, fontweight="bold", pad=10)
+    ax_rc.set_title("RGB", fontsize=24, fontweight="bold", pad=10)
     ax_rc.set_xticks([])
     ax_rc.set_yticks([])
-    fig_rc.colorbar(ax_rc.images[0], ax=ax_rc, fraction=0.046, pad=0.04,
-                    label="Pearson correlation")
+    cbar_rc = fig_rc.colorbar(ax_rc.images[0], ax=ax_rc, fraction=0.046, pad=0.04)
+    cbar_rc.ax.set_ylabel("Pearson correlation", fontsize=24)
+    cbar_rc.ax.tick_params(labelsize=20)
 
-    rgb_clean_path = os.path.join(args.output_dir, f"sh_correlation_rgb_clean_{safe_title}_J{J}.png")
+    rgb_clean_path = os.path.join(args.output_dir, f"sh_correlation_rgb_clean_{safe_title}_J{J}.pdf")
     fig_rc.savefig(rgb_clean_path, dpi=args.dpi, bbox_inches="tight")
     plt.close(fig_rc)
     print(f"Saved: {rgb_clean_path}")
@@ -332,13 +333,14 @@ def main():
     fig_kc, ax_kc = plt.subplots(figsize=(10, 10))
     ax_kc.imshow(corr_klt, vmin=-1.0, vmax=1.0, cmap=cmap,
                  interpolation="nearest", aspect="equal")
-    ax_kc.set_title("KLT", fontsize=16, fontweight="bold", pad=10)
+    ax_kc.set_title("KLT", fontsize=24, fontweight="bold", pad=10)
     ax_kc.set_xticks([])
     ax_kc.set_yticks([])
-    fig_kc.colorbar(ax_kc.images[0], ax=ax_kc, fraction=0.046, pad=0.04,
-                    label="Pearson correlation")
+    cbar_kc = fig_kc.colorbar(ax_kc.images[0], ax=ax_kc, fraction=0.046, pad=0.04)
+    cbar_kc.ax.set_ylabel("Pearson correlation", fontsize=24)
+    cbar_kc.ax.tick_params(labelsize=20)
 
-    klt_clean_path = os.path.join(args.output_dir, f"sh_correlation_klt15_clean_{safe_title}_J{J}.png")
+    klt_clean_path = os.path.join(args.output_dir, f"sh_correlation_klt15_clean_{safe_title}_J{J}.pdf")
     fig_kc.savefig(klt_clean_path, dpi=args.dpi, bbox_inches="tight")
     plt.close(fig_kc)
     print(f"Saved: {klt_clean_path}")

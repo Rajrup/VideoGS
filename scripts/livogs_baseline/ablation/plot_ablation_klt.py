@@ -9,7 +9,8 @@ Generates:
   1. klt_compressed_size     -- grouped bar chart of total compressed size
   2. klt_size_breakdown      -- stacked bar chart of per-attribute size breakdown
   3. klt_quality_vs_size     -- scatter plot of PSNR vs compressed size (if eval exists)
-  4. Prints a text summary table to stdout
+  4. klt_transform_time      -- grouped bar chart of encode/decode time overhead vs RGB
+  5. Prints a text summary table to stdout
 """
 
 import argparse
@@ -305,6 +306,61 @@ def plot_quality_vs_size(all_data, all_eval, dataset_labels, output_folder, fmt)
 
 
 # ---------------------------------------------------------------------------
+# Figure 4: Color transform time overhead
+# ---------------------------------------------------------------------------
+def plot_transform_time(all_data, dataset_labels, output_folder, fmt):
+    """Grouped bar chart: encode & decode time per variant, annotated with
+    overhead vs RGB (the no-transform baseline)."""
+    variants = [v for v in VARIANT_ORDER if any(v in d for d in all_data.values())]
+    n_variants = len(variants)
+    n_datasets = len(dataset_labels)
+    bar_width = 0.8 / n_variants
+    x = np.arange(n_datasets)
+
+    fig, (ax_enc, ax_dec) = plt.subplots(1, 2, figsize=(max(10, n_datasets * 4), 5))
+
+    for ax, time_key, title in [
+        (ax_enc, "encode_time_ms", "Encode Time"),
+        (ax_dec, "decode_time_ms", "Decode Time"),
+    ]:
+        for vi, variant in enumerate(variants):
+            offset = (vi - n_variants / 2 + 0.5) * bar_width
+            color = VARIANT_COLORS[variant]
+            times = [
+                all_data[ds].get(variant, {}).get(time_key, 0)
+                for ds in dataset_labels
+            ]
+            bars = ax.bar(
+                x + offset, times, bar_width, color=color, alpha=0.85,
+                edgecolor="white", label=VARIANT_LABELS[variant],
+            )
+            for bar, val in zip(bars, times):
+                ax.annotate(
+                    f"{val:.1f}",
+                    xy=(bar.get_x() + bar.get_width() / 2, bar.get_height()),
+                    ha="center", va="bottom", fontsize=9,
+                )
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(dataset_labels, fontsize=10)
+        ax.set_ylabel("Time (ms)", fontsize=11)
+        ax.set_title(title, fontsize=12)
+        ax.legend(fontsize=9)
+        ax.grid(True, axis="y", alpha=0.3)
+        ax.set_ylim(bottom=0)
+
+    fig.suptitle(
+        "KLT Ablation: Color Transform Time Overhead (vs RGB baseline)",
+        fontsize=13,
+    )
+    fig.tight_layout()
+    out = os.path.join(output_folder, f"klt_transform_time.{fmt}")
+    fig.savefig(out, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {out}")
+
+
+# ---------------------------------------------------------------------------
 # Text summary table
 # ---------------------------------------------------------------------------
 def print_summary_table(all_data, all_eval, dataset_labels):
@@ -437,6 +493,7 @@ def main():
     plot_compressed_size(all_data, dataset_labels, args.output_folder, args.format)
     plot_size_breakdown(all_data, dataset_labels, args.output_folder, args.format)
     plot_quality_vs_size(all_data, all_eval, dataset_labels, args.output_folder, args.format)
+    plot_transform_time(all_data, dataset_labels, args.output_folder, args.format)
     print("Done!")
 
 
