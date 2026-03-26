@@ -35,7 +35,7 @@ if _LIVOGS_COMPRESSION not in sys.path:
     sys.path.insert(0, _LIVOGS_COMPRESSION)
 
 from compress_decompress import encode_livogs
-from compress_decompress_optimized import decode_livogs_optimized
+from compress_decompress_optimized import decode_livogs_optimized, decode_livogs_optimized_v2
 
 # ---------------------------------------------------------------------------
 # PLY I/O (VideoGS-compatible) -- identical to original pipeline
@@ -256,6 +256,9 @@ if __name__ == "__main__":
 
     decoded_params = decode_livogs_optimized(compressed_state, device=device, device_id=device_id)
 
+    # Doesn't show improvement on Jetson Orin
+    # decoded_params = decode_livogs_optimized_v2(compressed_state, device=device, device_id=device_id)
+
     torch.cuda.synchronize(device_id)
     print("Warmup GPU done.")
 
@@ -304,6 +307,9 @@ if __name__ == "__main__":
         t_dec_start = time.perf_counter()
 
         decoded_params = decode_livogs_optimized(compressed_state, device=device, device_id=device_id)
+
+        # Doesn't show improvement on Jetson Orin
+        # decoded_params = decode_livogs_optimized_v2(compressed_state, device=device, device_id=device_id)
 
         torch.cuda.synchronize(device_id)
         t_dec_end = time.perf_counter()

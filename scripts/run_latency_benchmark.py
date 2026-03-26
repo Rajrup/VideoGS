@@ -26,7 +26,7 @@ import pynvml
 # Constants
 # ---------------------------------------------------------------------------
 DATASET_NAME = "HiFi4G_Dataset"
-SH_DEGREE = 3
+SH_DEGREE = 0
 RESOLUTION = 2
 SAMPLING_INTERVAL_SEC = 0.030  # 30 ms
 
@@ -71,21 +71,41 @@ class PipelineConfig:
         self.build_args_fn = build_args_fn
 
 
+LIVOGS_SEQ_PARAMS: dict[str, dict] = {
+    "4K_Actor1_Greeting": {
+        "J": "12",
+        "quantize_step_scales": "0.0001",
+        "quantize_step_quats": "0.01",
+        "quantize_step_opacity": "0.1",
+        "quantize_step_sh_dc": "0.02",
+        "quantize_step_sh_rest": "0.06",
+        "rlgr_block_size": "512",
+    },
+}
+
+_LIVOGS_DEFAULTS = {
+    "J": "12",
+    "quantize_step": "0.0001",
+    "rlgr_block_size": "4096",
+}
+
+
 def _livogs_args(ply_path: str, output_folder: str, seq: str,
                  frame_start: int, frame_end: int, interval: int) -> list[str]:
-    return [
+    params = {**_LIVOGS_DEFAULTS, **LIVOGS_SEQ_PARAMS.get(seq, {})}
+    args = [
         "--ply_path", ply_path,
         "--output_folder", output_folder,
         "--frame_start", str(frame_start),
         "--frame_end", str(frame_end),
         "--interval", str(interval),
         "--sh_degree", str(SH_DEGREE),
-        "--J", "12",
-        "--quantize_step", "0.0001",
         "--sh_color_space", "klt",
-        "--rlgr_block_size", "4096",
-        "--nvcomp_algorithm", "ANS",
+        "--nvcomp_algorithm", "None",
     ]
+    for key, val in params.items():
+        args.extend([f"--{key}", val])
+    return args
 
 
 def _videogs_args(ply_path: str, output_folder: str, seq: str,
@@ -135,7 +155,7 @@ def _mesongs_args(ply_path: str, output_folder: str, seq: str,
     ]
 
 
-DATA_PATH_GLOBAL = "/synology/rajrup/VideoGS"
+DATA_PATH_GLOBAL = "/home/rajrup/VideoGS"
 
 
 def build_pipeline_configs() -> dict[str, PipelineConfig]:
@@ -143,7 +163,7 @@ def build_pipeline_configs() -> dict[str, PipelineConfig]:
         "livogs": PipelineConfig(
             "livogs", "videogs",
             VIDEOGS_ROOT / "scripts" / "livogs_baseline" / "compress_decompress_pipeline.py",
-            VIDEOGS_ROOT, 1, _livogs_args,
+            VIDEOGS_ROOT, 10, _livogs_args,
         ),
         "videogs": PipelineConfig(
             "videogs", "videogs",
@@ -169,6 +189,8 @@ def build_pipeline_configs() -> dict[str, PipelineConfig]:
 class ResourceMonitor:
     """Background thread that samples CPU/RAM/GPU metrics at a fixed interval."""
 
+    _JETSON_GPU_LOAD_PATH = Path("/sys/devices/platform/gpu.0/load")
+
     def __init__(self, gpu_index: int = 0, interval: float = SAMPLING_INTERVAL_SEC):
         self._interval = interval
         self._gpu_index = gpu_index
@@ -181,6 +203,28 @@ class ResourceMonitor:
         pynvml.nvmlInit()
         self._gpu_handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_index)
 
+        self._is_tegra = self._detect_tegra()
+        if self._is_tegra:
+            print("  [ResourceMonitor] Tegra/Jetson detected — using sysfs fallbacks for GPU metrics")
+
+    @classmethod
+    def _detect_tegra(cls) -> bool:
+        """Return True when running on an NVIDIA Jetson (Tegra) platform."""
+        if cls._JETSON_GPU_LOAD_PATH.exists():
+            return True
+        try:
+            return Path("/etc/nv_tegra_release").exists()
+        except OSError:
+            return False
+
+    def _jetson_gpu_util_pct(self) -> float:
+        """Read GPU utilisation from sysfs (0-1000 scale -> 0-100%)."""
+        try:
+            raw = self._JETSON_GPU_LOAD_PATH.read_text().strip()
+            return round(int(raw) / 10.0, 1)
+        except (OSError, ValueError):
+            return 0.0
+
     def _collect_sample(self) -> dict[str, Any]:
         elapsed = time.perf_counter() - self._t0
 
@@ -189,20 +233,35 @@ class ResourceMonitor:
         cpu_cores_active = sum(1 for c in cpu_per_core if c > 5.0)
         ram_used_mb = psutil.virtual_memory().used / (1024 * 1024)
 
-        gpu_util = pynvml.nvmlDeviceGetUtilizationRates(self._gpu_handle)
-        gpu_mem = pynvml.nvmlDeviceGetMemoryInfo(self._gpu_handle)
-        gpu_enc = pynvml.nvmlDeviceGetEncoderUtilization(self._gpu_handle)
-        gpu_dec = pynvml.nvmlDeviceGetDecoderUtilization(self._gpu_handle)
+        if self._is_tegra:
+            gpu_util_pct = self._jetson_gpu_util_pct()
+            gpu_mem_used_mb = 0
+            gpu_enc_util_pct = 0
+            gpu_dec_util_pct = 0
+            try:
+                gpu_mem = pynvml.nvmlDeviceGetMemoryInfo(self._gpu_handle)
+                gpu_mem_used_mb = gpu_mem.used // (1024 * 1024)
+            except pynvml.NVMLError:
+                pass
+        else:
+            gpu_util = pynvml.nvmlDeviceGetUtilizationRates(self._gpu_handle)
+            gpu_mem = pynvml.nvmlDeviceGetMemoryInfo(self._gpu_handle)
+            gpu_enc = pynvml.nvmlDeviceGetEncoderUtilization(self._gpu_handle)
+            gpu_dec = pynvml.nvmlDeviceGetDecoderUtilization(self._gpu_handle)
+            gpu_util_pct = gpu_util.gpu
+            gpu_mem_used_mb = gpu_mem.used // (1024 * 1024)
+            gpu_enc_util_pct = gpu_enc[0]
+            gpu_dec_util_pct = gpu_dec[0]
 
         sample: dict[str, Any] = {
             "elapsed_sec": round(elapsed, 4),
             "cpu_pct": cpu_overall,
             "cpu_cores_active": cpu_cores_active,
             "ram_used_mb": round(ram_used_mb, 1),
-            "gpu_util_pct": gpu_util.gpu,
-            "gpu_mem_used_mb": gpu_mem.used // (1024 * 1024),
-            "gpu_enc_util_pct": gpu_enc[0],
-            "gpu_dec_util_pct": gpu_dec[0],
+            "gpu_util_pct": gpu_util_pct,
+            "gpu_mem_used_mb": gpu_mem_used_mb,
+            "gpu_enc_util_pct": gpu_enc_util_pct,
+            "gpu_dec_util_pct": gpu_dec_util_pct,
         }
         for i, val in enumerate(cpu_per_core):
             sample[f"cpu_core_{i}_pct"] = val
@@ -303,7 +362,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Latency & resource benchmark for 4 compression pipelines"
     )
-    p.add_argument("--data_path", type=str, default="/synology/rajrup/VideoGS")
+    p.add_argument("--data_path", type=str, default="/home/rajrup/VideoGS")
     p.add_argument("--pipelines", nargs="+", choices=PIPELINES, default=PIPELINES)
     p.add_argument("--sequences", nargs="+", default=SEQUENCES)
     p.add_argument("--frame_start", type=int, default=None,
@@ -361,11 +420,16 @@ def main() -> None:
             interval = cfg.default_interval
             frame_start = frame_start_override
             frame_end = frame_end_override
-
+            
             output_dir = str(
                 Path(args.data_path) / "train_output" / DATASET_NAME / seq
                 / "latency_benchmark" / pipeline_name
             )
+            if pipeline_name == "livogs":
+                    output_dir = str(
+                    Path(args.data_path) / "train_output" / DATASET_NAME / seq
+                    / "latency_benchmark" / f"{pipeline_name}_sh_degree_{SH_DEGREE}"
+                )
 
             if args.skip_existing and Path(output_dir, "summary.json").is_file():
                 print(f"  SKIP (exists): {pipeline_name} | {seq}")
@@ -491,4 +555,7 @@ if __name__ == "__main__":
 '''
 conda activate videogs
 python scripts/run_latency_benchmark.py --gpu_id 0
+
+# Single sequence
+python scripts/run_latency_benchmark.py --pipelines livogs --sequences 4K_Actor1_Greeting
 '''
